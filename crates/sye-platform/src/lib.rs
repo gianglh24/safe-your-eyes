@@ -1,0 +1,38 @@
+//! Cross-platform OS adapters for `safe-your-eyes`.
+//!
+//! Provides genuine, lightweight adapters for system clock, system tray (F12), idle and DND
+//! providers (F13), desktop notifications and WAV audio playback (F14), and single-instance local
+//! IPC, OS paths, autostart, and subprocess overlay launching (F15).
+
+#![cfg_attr(not(target_os = "windows"), forbid(unsafe_code))]
+
+pub mod audio;
+pub mod autostart;
+pub mod clock;
+pub mod dnd;
+pub mod idle;
+pub mod ipc;
+pub mod notify;
+pub mod overlay;
+pub mod paths;
+#[cfg(test)]
+mod test_util;
+pub mod tray;
+
+pub use audio::OsAudioPlayer;
+pub use autostart::{
+    AutostartEntry, AutostartManager, default_autostart_path, render_linux_desktop_entry,
+    render_macos_launch_agent_plist, render_windows_startup_cmd,
+};
+pub use clock::SystemClock;
+pub use dnd::SystemDndProvider;
+pub use idle::SystemIdleProvider;
+pub use ipc::{DEFAULT_IPC_TIMEOUT, IpcClient, IpcError, IpcServer};
+pub use notify::{OsNotifier, format_pre_break_notification};
+pub use overlay::SubprocessOverlayLauncher;
+pub use paths::{AppPaths, session_path_for_config};
+pub use sye_core::traits;
+pub use tray::{
+    TrayEvent, TrayHandle, TrayIconState, format_status_label, format_tooltip,
+    icon_state_for_snapshot, map_menu_id_to_event, render_eye_icon_rgba,
+};

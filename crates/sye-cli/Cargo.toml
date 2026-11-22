@@ -1,0 +1,20 @@
+[package]
+name = "sye-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Single-binary CLI, lightweight background daemon, and GUI subprocess entry point"
+
+[[bin]]
+name = "safe-your-eyes"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { workspace = true }
+sye-core = { workspace = true }
+sye-platform = { workspace = true }
+sye-ui = { workspace = true }
+
+[lints]
+workspace = true

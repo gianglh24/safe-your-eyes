@@ -1,0 +1,17 @@
+# Rust build artifacts
+/target
+
+# Temporary/scratch data (per workspace rule)
+/.tmp
+
+# Agent orchestration metadata
+/.agents/
+
+# Editor & OS clutter
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
