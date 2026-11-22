@@ -117,13 +117,17 @@ pub(crate) fn parse_overlay_outcome(raw: &[u8]) -> OverlayOutcome {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::thread;
+    #[cfg(unix)]
     use std::time::{Duration, Instant};
 
+    #[cfg(unix)]
     use sye_core::BreakType;
 
     use super::*;
 
+    #[cfg(unix)]
     fn sample_request() -> OverlayRequest {
         OverlayRequest {
             break_type: BreakType::Short,
@@ -138,6 +142,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn wait_for_outcome(
         launcher: &mut SubprocessOverlayLauncher,
         timeout: Duration,

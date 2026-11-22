@@ -19,11 +19,11 @@ impl TestTempDir {
             .parent()
             .and_then(Path::parent)
             .unwrap_or(manifest_dir);
-        let base = repo_root.join(".tmp").join("sye-platform-tests");
+        let base = repo_root.join(".tmp");
         fs::create_dir_all(&base)?;
 
         let seq = TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir = base.join(format!("{prefix}-{}-{seq}", std::process::id()));
+        let dir = base.join(format!("t-{prefix}-{}-{seq}", std::process::id()));
         fs::create_dir_all(&dir)?;
         Ok(Self { path: dir })
     }

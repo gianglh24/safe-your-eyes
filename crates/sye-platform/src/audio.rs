@@ -198,6 +198,7 @@ fn spawn_first_available_player(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::time::{Duration, Instant};
 
     use super::*;
@@ -244,7 +245,7 @@ mod tests {
         let player = OsAudioPlayer::with_players(
             tmp.path().to_path_buf(),
             vec![PlayerSpec {
-                program: "/bin/true".to_owned(),
+                program: "true".to_owned(),
                 args: Vec::new(),
             }],
         );

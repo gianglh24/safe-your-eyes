@@ -106,7 +106,7 @@ impl Notifier for OsNotifier {
 
         #[cfg(not(all(unix, not(target_os = "macos"))))]
         {
-            let _ = notification
+            notification
                 .show()
                 .map_err(|err| PlatformError::Unavailable(err.to_string()))?;
             Ok(())

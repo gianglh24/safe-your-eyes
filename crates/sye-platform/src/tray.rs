@@ -71,6 +71,20 @@ impl TrayHandle {
     ///
     /// Returns `Err(PlatformError::Unavailable(_))` when no tray host or display server is active.
     pub fn try_new(initial: &TraySnapshot, tx: Sender<TrayEvent>) -> Result<Self, PlatformError> {
+        #[cfg(target_os = "macos")]
+        if std::thread::current().name() != Some("main") {
+            return Err(PlatformError::Unavailable(
+                "macOS system tray must be initialized on the main thread".to_owned(),
+            ));
+        }
+
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Self::try_new_inner(initial, tx)
+        }))
+        .map_err(|_| PlatformError::Unavailable("system tray initialization panicked".to_owned()))?
+    }
+
+    fn try_new_inner(initial: &TraySnapshot, tx: Sender<TrayEvent>) -> Result<Self, PlatformError> {
         let status_item =
             MenuItem::with_id(MENU_ID_STATUS, format_status_label(initial), false, None);
         let enable_item = MenuItem::with_id(MENU_ID_ENABLE, "Enable Safe Your Eyes", true, None);

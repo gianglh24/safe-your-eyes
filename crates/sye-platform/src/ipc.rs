@@ -91,7 +91,9 @@ impl IpcServer {
             .reclaim_name(true)
             .create_sync()
             .map_err(|err| {
-                if err.kind() == io::ErrorKind::AddrInUse {
+                if err.kind() == io::ErrorKind::AddrInUse
+                    || (cfg!(windows) && err.kind() == io::ErrorKind::PermissionDenied)
+                {
                     IpcError::AlreadyRunning
                 } else {
                     IpcError::Io(err.to_string())
@@ -269,8 +271,16 @@ fn prepare_unix_socket_path(endpoint: &Path) -> Result<(), IpcError> {
 fn to_local_socket_name(endpoint: &Path) -> Result<Name<'static>, IpcError> {
     #[cfg(unix)]
     {
-        endpoint
-            .to_path_buf()
+        let resolved = if endpoint.as_os_str().len() >= 100
+            && let Ok(cwd) = std::env::current_dir()
+            && let Ok(rel) = endpoint.strip_prefix(&cwd)
+            && !rel.as_os_str().is_empty()
+        {
+            rel.to_path_buf()
+        } else {
+            endpoint.to_path_buf()
+        };
+        resolved
             .to_fs_name::<GenericFilePath>()
             .map_err(|err| IpcError::Io(err.to_string()))
     }
@@ -311,8 +321,8 @@ mod tests {
 
     #[test]
     fn ipc_round_trip_multiple_commands() -> Result<(), Box<dyn std::error::Error>> {
-        let tmp = TestTempDir::new("ipc-roundtrip")?;
-        let sock = tmp.path().join("daemon.sock");
+        let tmp = TestTempDir::new("rt")?;
+        let sock = tmp.path().join("s.sock");
         let server = IpcServer::bind(&sock)?;
 
         let handle = thread::spawn(move || -> Result<(), IpcError> {
@@ -369,8 +379,8 @@ mod tests {
 
     #[test]
     fn ipc_single_instance_rejects_second_bind() -> Result<(), Box<dyn std::error::Error>> {
-        let tmp = TestTempDir::new("ipc-single")?;
-        let sock = tmp.path().join("single.sock");
+        let tmp = TestTempDir::new("si")?;
+        let sock = tmp.path().join("s.sock");
         let _server = IpcServer::bind(&sock)?;
 
         let second = IpcServer::bind(&sock);
@@ -381,8 +391,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ipc_recovers_from_stale_unix_socket() -> Result<(), Box<dyn std::error::Error>> {
-        let tmp = TestTempDir::new("ipc-stale")?;
-        let sock = tmp.path().join("stale.sock");
+        let tmp = TestTempDir::new("st")?;
+        let sock = tmp.path().join("s.sock");
 
         // Create a real Unix socket and drop the listener without removing the file.
         let raw_listener = std::os::unix::net::UnixListener::bind(&sock)?;
@@ -397,8 +407,8 @@ mod tests {
     #[test]
     fn ipc_client_reports_not_running_for_missing_socket() -> Result<(), Box<dyn std::error::Error>>
     {
-        let tmp = TestTempDir::new("ipc-missing")?;
-        let sock = tmp.path().join("nonexistent.sock");
+        let tmp = TestTempDir::new("mi")?;
+        let sock = tmp.path().join("s.sock");
 
         let err = IpcClient::send_command(&sock, &IpcCommand::Status).err();
         assert_eq!(err, Some(IpcError::NotRunning));
@@ -408,8 +418,8 @@ mod tests {
     #[test]
     fn ipc_server_rejects_oversized_line_without_crashing() -> Result<(), Box<dyn std::error::Error>>
     {
-        let tmp = TestTempDir::new("ipc-oversized")?;
-        let sock = tmp.path().join("oversized.sock");
+        let tmp = TestTempDir::new("ov")?;
+        let sock = tmp.path().join("s.sock");
         let server = IpcServer::bind(&sock)?;
 
         let handle = thread::spawn(move || -> Result<(), IpcError> {
@@ -448,8 +458,8 @@ mod tests {
 
     #[test]
     fn ipc_nonblocking_accept_returns_false_when_idle() -> Result<(), Box<dyn std::error::Error>> {
-        let tmp = TestTempDir::new("ipc-nonblock")?;
-        let sock = tmp.path().join("nb.sock");
+        let tmp = TestTempDir::new("nb")?;
+        let sock = tmp.path().join("s.sock");
         let server = IpcServer::bind(&sock)?;
         server.set_nonblocking(ListenerNonblockingMode::Accept)?;
 
