@@ -11,6 +11,7 @@ use sye_core::scheduler::{OverlayOutcome, OverlayRequest};
 
 use crate::UiError;
 use crate::theme::{colors, radii};
+use crate::ui::app_icon;
 
 #[cfg(target_os = "linux")]
 use nsh_platform_linux as platform;
@@ -303,7 +304,10 @@ pub(crate) fn build_overlay_view(
                 .rounded(radii::PILL)
                 .bg(colors::OVERLAY_TRACK)
                 .border_1()
-                .border_color(colors::BORDER_EMPHASIZED)
+                .border_color(colors::OVERLAY_BORDER_EMPHASIZED)
+                .transition()
+                .duration(crate::theme::motion::CONTROL_MS)
+                .ease_out()
                 .hover(|s| s.opacity(0.9))
                 .active(|s| s.opacity(0.8))
                 .disabled_style(|s| s.opacity(0.4))
@@ -331,6 +335,9 @@ pub(crate) fn build_overlay_view(
                 .justify_center()
                 .rounded(radii::PILL)
                 .bg(colors::ACCENT)
+                .transition()
+                .duration(crate::theme::motion::CONTROL_MS)
+                .ease_out()
                 .hover(|s| s.opacity(0.92))
                 .active(|s| s.opacity(0.84))
                 .disabled_style(|s| s.opacity(0.4))
@@ -343,16 +350,27 @@ pub(crate) fn build_overlay_view(
         );
     }
 
+    let card_scale = animated_value(if reduce_motion() { 1.0 } else { 0.98 });
+    if !reduce_motion() {
+        card_scale.timing(
+            1.0,
+            crate::theme::motion::THEME_COLOR_MS,
+            crate::theme::motion::COZY_EASE,
+        );
+    }
+
     let mut card = view()
         .w(px(560.0))
         .max_w(percentage(0.9))
         .rounded(radii::PAGE)
         .bg(colors::OVERLAY_CARD)
         .border_1()
-        .border_color(colors::BORDER)
+        .border_color(colors::OVERLAY_BORDER)
         .p_8()
         .gap_5()
         .items_center()
+        .bind_scale(&card_scale)
+        .child(app_icon(48.0))
         .child(
             view()
                 .px_3()
@@ -390,6 +408,9 @@ pub(crate) fn build_overlay_view(
                         .h(px(8.0))
                         .rounded(radii::PILL)
                         .bg(colors::ACCENT)
+                        .transition_all()
+                        .duration(180.0)
+                        .ease_linear()
                         .w(move || percentage(vm.with(OverlayViewModel::progress))),
                 ),
         );

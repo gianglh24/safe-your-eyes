@@ -1,11 +1,47 @@
-//! Reusable Cozy styled UI primitives built on `nsh_base` and `theme`.
+//! Reusable Cozy styled UI primitives built on `nsh_base`, `theme`, and Astryx layout rules.
+//!
+//! Design system reference: <https://github.com/tunglt1810/cozy>.
+
+use std::sync::{Arc, OnceLock};
 
 use nsh_base::{button, input, link, switch};
+use nsh_core::element::ImageSrc;
 use nsh_core::prelude::*;
 
-use crate::theme::{SUPPORT_URL, colors, radii};
+use crate::theme::{SUPPORT_URL, colors, motion, radii};
 
-/// Pastel KPI card color variant matching `DESIGN.md`.
+include!(concat!(env!("OUT_DIR"), "/app_icon.rs"));
+
+/// Shared geometry constants for spring-animated sliding indicators.
+const SIDEBAR_ITEM_HEIGHT: f32 = 38.0;
+const SIDEBAR_ITEM_GAP: f32 = 4.0;
+const SEGMENT_OPTION_WIDTH: f32 = 80.0;
+const SEGMENT_OPTION_HEIGHT: f32 = 32.0;
+
+fn app_icon_rgba() -> Arc<[u8]> {
+    static PIXELS: OnceLock<Arc<[u8]>> = OnceLock::new();
+    Arc::clone(PIXELS.get_or_init(|| {
+        let expected = (APP_ICON_SIZE * APP_ICON_SIZE * 4) as usize;
+        let mut out = Vec::with_capacity(expected);
+        for &[count, r, g, b, a] in APP_ICON_RLE.as_chunks::<5>().0 {
+            let rgba = [r, g, b, a];
+            for _ in 0..usize::from(count) {
+                out.extend_from_slice(&rgba);
+            }
+        }
+        out.resize(expected, 0);
+        Arc::from(out)
+    }))
+}
+
+/// Renders the embedded Safe Your Eyes squircle app icon at `size_px`.
+pub(crate) fn app_icon(size_px: f32) -> impl IntoElement {
+    let src = ImageSrc::rgba(APP_ICON_SIZE, APP_ICON_SIZE, app_icon_rgba())
+        .size(Size::new(px(size_px), px(size_px)));
+    image(src).w(px(size_px)).h(px(size_px)).flex_shrink_0()
+}
+
+/// Pastel KPI card color variant matching `tunglt1810/cozy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KpiTone {
     Sage,
@@ -34,6 +70,74 @@ impl KpiTone {
     }
 }
 
+/// Page H1 heading paired with a Cozy pastel highlighter bar sweeping from left (`tunglt1810/cozy`).
+pub(crate) fn page_heading(
+    title: impl IntoReactive<SharedString>,
+    subtitle: impl IntoReactive<SharedString>,
+    highlight_scale: &AnimatedValue,
+) -> impl IntoElement {
+    let (bx1, by1, bx2, by2) = motion::COZY_BEZIER;
+    view()
+        .gap_1()
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap_3()
+                .child(
+                    text(title)
+                        .text_2xl()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(colors::TEXT_PRIMARY),
+                )
+                .child(
+                    view()
+                        .px_2()
+                        .py_1()
+                        .rounded(radii::PILL)
+                        .bg(colors::BACKGROUND_MUTED)
+                        .border_1()
+                        .border_color(colors::BORDER)
+                        .transition_colors()
+                        .duration(motion::THEME_COLOR_MS)
+                        .ease_bezier(bx1, by1, bx2, by2)
+                        .child(
+                            text(subtitle)
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(colors::TEXT_SECONDARY),
+                        ),
+                ),
+        )
+        .child(
+            view()
+                .w(px(48.0))
+                .h(px(4.0))
+                .rounded(radii::PILL)
+                .bg(colors::HEADING_HIGHLIGHT)
+                .origin_left()
+                .bind_transform(nsh_core::TransformKind::ScaleX, highlight_scale),
+        )
+}
+
+/// Section heading with optional supporting caption inside the unified Form Card.
+pub(crate) fn section_header(title: &'static str, caption: &'static str) -> impl IntoElement {
+    view()
+        .gap_1()
+        .child(
+            text(title)
+                .text_base()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(colors::TEXT_PRIMARY),
+        )
+        .child(text(caption).text_xs().text_color(colors::TEXT_SECONDARY))
+}
+
+/// Hairline horizontal divider (`1px`) separating sections inside a Form Card (Astryx Divider).
+pub(crate) fn section_divider() -> impl IntoElement {
+    view().h(px(1.0)).bg(colors::BORDER)
+}
+
 /// Cozy primary pill button (warm coral fill + WCAG AAA dark espresso text).
 pub(crate) fn primary_button(
     label: impl IntoReactive<SharedString>,
@@ -47,8 +151,11 @@ pub(crate) fn primary_button(
         .justify_center()
         .rounded(radii::PILL)
         .bg(colors::ACCENT)
+        .transition()
+        .duration(motion::CONTROL_MS)
+        .ease_out()
         .hover(|s| s.opacity(0.92))
-        .active(|s| s.opacity(0.84))
+        .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.88))
         .disabled_style(|s| s.opacity(0.45))
         .child(
             text(label)
@@ -58,7 +165,7 @@ pub(crate) fn primary_button(
         )
 }
 
-/// Cozy secondary pill button (warm muted surface + emphasized border).
+/// Cozy secondary pill button (`bg-surface` fill + `border-emphasized`, weight 600 per Cozy v0.2.0).
 pub(crate) fn secondary_button(
     label: impl IntoReactive<SharedString>,
     on_press: impl Fn() + 'static,
@@ -70,21 +177,24 @@ pub(crate) fn secondary_button(
         .items_center()
         .justify_center()
         .rounded(radii::PILL)
-        .bg(colors::BACKGROUND_MUTED)
+        .bg(colors::BACKGROUND_SURFACE)
         .border_1()
         .border_color(colors::BORDER_EMPHASIZED)
-        .hover(|s| s.opacity(0.9))
-        .active(|s| s.opacity(0.8))
+        .transition()
+        .duration(motion::CONTROL_MS)
+        .ease_out()
+        .hover(|s| s.bg(colors::OVERLAY_HOVER))
+        .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.88))
         .disabled_style(|s| s.opacity(0.45))
         .child(
             text(label)
                 .text_sm()
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(colors::TEXT_PRIMARY),
         )
 }
 
-/// Cozy ghost pill button for tertiary/cancel actions.
+/// Cozy ghost pill button for tertiary/cancel actions (weight 600 per Cozy v0.2.0).
 pub(crate) fn ghost_button(
     label: impl IntoReactive<SharedString>,
     on_press: impl Fn() + 'static,
@@ -96,18 +206,21 @@ pub(crate) fn ghost_button(
         .items_center()
         .justify_center()
         .rounded(radii::PILL)
-        .hover(|s| s.bg(colors::BACKGROUND_MUTED))
-        .active(|s| s.opacity(0.8))
+        .transition()
+        .duration(motion::CONTROL_MS)
+        .ease_out()
+        .hover(|s| s.bg(colors::OVERLAY_HOVER))
+        .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.84))
         .disabled_style(|s| s.opacity(0.45))
         .child(
             text(label)
                 .text_sm()
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(colors::TEXT_SECONDARY),
         )
 }
 
-/// Cozy destructive pill button for remove/delete actions.
+/// Cozy destructive pill button using measured `error-muted` / `on-error-muted` pair from `tunglt1810/cozy`.
 pub(crate) fn destructive_button(
     label: impl IntoReactive<SharedString>,
     on_press: impl Fn() + 'static,
@@ -120,39 +233,97 @@ pub(crate) fn destructive_button(
         .justify_center()
         .rounded(radii::PILL)
         .bg(colors::ERROR_SOFT)
-        .hover(|s| s.opacity(0.88))
-        .active(|s| s.opacity(0.76))
+        .transition()
+        .duration(motion::CONTROL_MS)
+        .ease_out()
+        .hover(|s| s.opacity(0.9))
+        .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.82))
         .child(
             text(label)
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(colors::ERROR),
+                .text_color(colors::ON_ERROR_MUTED),
         )
 }
 
-/// Warm rounded Cozy card container (`18px` radius).
-pub(crate) fn cozy_card() -> View {
+/// Astryx-style SegmentedControl pill track with spring-animated sliding thumb (`tunglt1810/cozy`).
+pub(crate) fn segmented_track(active_index: impl Fn() -> usize + 'static) -> View {
+    let (bx1, by1, bx2, by2) = motion::COZY_BEZIER;
+    let sliding_pill = view()
+        .absolute()
+        .top(px(4.0))
+        .left(px(4.0))
+        .z_index(0)
+        .w(px(SEGMENT_OPTION_WIDTH))
+        .h(px(SEGMENT_OPTION_HEIGHT))
+        .rounded(radii::PILL)
+        .bg(colors::SEGMENT_ACTIVE)
+        .border_1()
+        .border_color(colors::BORDER_EMPHASIZED)
+        .translate_x(move || px(active_index() as f32 * SEGMENT_OPTION_WIDTH))
+        .transition_transform()
+        .ease_spring(motion::COZY_SPRING);
+
     view()
-        .rounded(radii::CONTAINER)
-        .bg(colors::BACKGROUND_SURFACE)
+        .relative()
+        .flex_row()
+        .items_center()
+        .p_1()
+        .rounded(radii::PILL)
+        .bg(colors::BACKGROUND_MUTED)
         .border_1()
         .border_color(colors::BORDER)
-        .p_4()
-        .gap_3()
+        .transition_colors()
+        .duration(motion::THEME_COLOR_MS)
+        .ease_bezier(bx1, by1, bx2, by2)
+        .child(sliding_pill)
 }
 
-/// Pastel KPI summary card (`18px` radius) with accent indicator dot, label, and metric.
+/// Fixed-width segment button overlaid above `segmented_track`'s sliding spring pill.
+pub(crate) fn segmented_option(
+    label: &'static str,
+    selected: impl Fn() -> bool + 'static,
+    on_press: impl Fn() + 'static,
+) -> impl IntoElement {
+    button()
+        .on_press(on_press)
+        .selected(selected)
+        .z_index(1)
+        .w(px(SEGMENT_OPTION_WIDTH))
+        .h(px(SEGMENT_OPTION_HEIGHT))
+        .items_center()
+        .justify_center()
+        .rounded(radii::PILL)
+        .transition_colors()
+        .duration(motion::CONTROL_MS)
+        .ease_out()
+        .child(
+            text(label)
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(colors::TEXT_PRIMARY),
+        )
+}
+
+/// Pastel KPI summary card (`20px` radius per `tunglt1810/cozy`) with accent dot, label, and value.
 pub(crate) fn pastel_kpi_card(
     tone: KpiTone,
     label: &'static str,
     value: impl IntoReactive<SharedString>,
 ) -> impl IntoElement {
+    let (bx1, by1, bx2, by2) = motion::COZY_BEZIER;
     view()
         .flex_1()
-        .rounded(radii::CONTAINER)
+        .rounded(radii::KPI)
         .bg(tone.bg())
-        .p_3()
+        .border_1()
+        .border_color(colors::BORDER)
+        .px_4()
+        .py_3()
         .gap_1()
+        .transition_colors()
+        .duration(motion::THEME_COLOR_MS)
+        .ease_bezier(bx1, by1, bx2, by2)
         .child(
             view()
                 .flex_row()
@@ -180,7 +351,7 @@ pub(crate) fn pastel_kpi_card(
         )
 }
 
-/// Cozy toggle switch with warm track and coral active fill.
+/// Cozy toggle switch row aligned to the shared 36px control rhythm (Astryx control-rhythm DR1).
 pub(crate) fn cozy_switch(
     label: &'static str,
     checked: impl Fn() -> bool + 'static,
@@ -188,10 +359,10 @@ pub(crate) fn cozy_switch(
 ) -> impl IntoElement {
     view()
         .flex_row()
+        .h(px(36.0))
         .items_center()
         .justify_between()
         .gap_3()
-        .py_1()
         .child(
             text(label)
                 .text_sm()
@@ -207,9 +378,12 @@ pub(crate) fn cozy_switch(
                     s.w(px(42.0))
                         .h(px(24.0))
                         .rounded(radii::PILL)
-                        .bg(colors::BACKGROUND_MUTED)
+                        .bg(colors::TRACK)
                         .border_1()
                         .border_color(colors::BORDER_EMPHASIZED)
+                        .transition_colors()
+                        .duration(motion::CONTROL_MS)
+                        .ease_out()
                         .checked(|c| c.bg(colors::ACCENT).border_color(colors::ACCENT))
                 })
                 .thumb_style(|s| {
@@ -217,11 +391,13 @@ pub(crate) fn cozy_switch(
                         .h(px(18.0))
                         .rounded(radii::PILL)
                         .bg(colors::SWITCH_KNOB)
+                        .transition_transform()
+                        .ease_spring(motion::COZY_SPRING)
                 }),
         )
 }
 
-/// Cozy styled single-line text input (`12px` radius).
+/// Cozy styled single-line text input (`12px` radius, `36px` height, `bg-surface` per Cozy v0.2.0).
 pub(crate) fn cozy_input(
     placeholder: &'static str,
     value: impl Fn() -> String + 'static,
@@ -238,13 +414,36 @@ pub(crate) fn cozy_input(
         .text_sm()
         .text_color(colors::TEXT_PRIMARY)
         .rounded(radii::ELEMENT)
-        .bg(colors::BACKGROUND_MUTED)
+        .bg(colors::BACKGROUND_SURFACE)
         .border_1()
         .border_color(colors::BORDER_EMPHASIZED)
-        .focus(|s| s.border_color(colors::ACCENT))
+        .transition_colors()
+        .duration(motion::CONTROL_MS)
+        .ease_out()
+        .hover(|s| s.border_color(colors::TEXT_DISABLED))
+        .focus(|s| s.border_color(colors::FOCUS_RING))
 }
 
-/// Sidebar navigation pill inside the Floating Sage Sidebar.
+/// Spring-animated sliding background indicator for the Floating Sage Sidebar (`tunglt1810/cozy`).
+pub(crate) fn sidebar_nav_indicator(
+    active_index: impl Fn() -> usize + 'static,
+) -> impl IntoElement {
+    let step = SIDEBAR_ITEM_HEIGHT + SIDEBAR_ITEM_GAP;
+    view()
+        .absolute()
+        .top(px(0.0))
+        .left(px(0.0))
+        .right(px(0.0))
+        .z_index(0)
+        .h(px(SIDEBAR_ITEM_HEIGHT))
+        .rounded(radii::NAV_ITEM)
+        .bg(colors::SIDEBAR_ACTIVE)
+        .translate_y(move || px(active_index() as f32 * step))
+        .transition_transform()
+        .ease_spring(motion::COZY_SPRING)
+}
+
+/// Sidebar navigation button layered above `sidebar_nav_indicator`.
 pub(crate) fn sidebar_nav_item(
     label: &'static str,
     selected: impl Fn() -> bool + 'static,
@@ -253,51 +452,68 @@ pub(crate) fn sidebar_nav_item(
     button()
         .on_press(on_press)
         .selected(selected)
-        .h(px(38.0))
+        .z_index(1)
+        .h(px(SIDEBAR_ITEM_HEIGHT))
         .px_3()
         .items_start()
         .justify_center()
-        .rounded(radii::ELEMENT)
-        .hover(|s| s.bg(colors::SIDEBAR_ACTIVE).opacity(0.85))
-        .selected_style(|s| s.bg(colors::SIDEBAR_ACTIVE))
+        .rounded(radii::NAV_ITEM)
+        .transition_colors()
+        .duration(motion::CONTROL_MS)
+        .ease_out()
+        .hover(|s| s.bg(colors::OVERLAY_HOVER))
         .child(
             text(label)
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(colors::TEXT_PRIMARY),
+                .text_color(colors::SIDEBAR_TEXT),
         )
 }
 
-/// Warm status banner for warnings or validation errors.
+/// Warm status banner using Cozy v0.2.0 contrast-checked fill, text, and border tokens.
 pub(crate) fn status_banner(
     is_error: bool,
     message: impl IntoReactive<SharedString>,
 ) -> impl IntoElement {
-    let (bg, fg) = if is_error {
-        (colors::ERROR_SOFT, colors::ERROR)
+    let (bg, fg, border) = if is_error {
+        (colors::ERROR_SOFT, colors::ON_ERROR_MUTED, colors::ERROR)
     } else {
-        (colors::WARNING_SOFT, colors::WARNING)
+        (
+            colors::WARNING_SOFT,
+            colors::ON_WARNING_MUTED,
+            colors::WARNING,
+        )
     };
-    view().rounded(radii::ELEMENT).bg(bg).px_3().py_2().child(
-        text(message)
-            .text_xs()
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(fg),
-    )
+    view()
+        .rounded(radii::ELEMENT)
+        .bg(bg)
+        .border_1()
+        .border_color(border)
+        .px_3()
+        .py_2()
+        .child(
+            text(message)
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(fg),
+        )
 }
 
 /// Direct Buy Me a Coffee link styled as a Cozy coral pill CTA.
 pub(crate) fn support_link(label: &'static str) -> impl IntoElement {
     link()
         .href(SUPPORT_URL)
-        .h(px(38.0))
+        .h(px(36.0))
         .px_4()
         .items_center()
         .justify_center()
         .rounded(radii::PILL)
         .bg(colors::ACCENT)
+        .transition()
+        .duration(motion::CONTROL_MS)
+        .ease_out()
         .hover(|s| s.opacity(0.92))
-        .active(|s| s.opacity(0.84))
+        .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.88))
         .child(
             text(label)
                 .text_sm()
@@ -322,7 +538,7 @@ pub(crate) fn build_support_qr_matrix() -> Option<(usize, Vec<bool>)> {
 pub(crate) fn support_qr_card() -> impl IntoElement {
     let qr_bg = rgb(0xFFFEF7);
     let qr_fg = rgb(0x261101);
-    let module_px = 4.0_f32;
+    let module_px = 3.5_f32;
 
     let mut grid = view().gap(px(0.0));
     if let Some((width, modules)) = build_support_qr_matrix() {
@@ -346,6 +562,7 @@ pub(crate) fn support_qr_card() -> impl IntoElement {
     view()
         .items_center()
         .gap_2()
+        .flex_shrink_0()
         .child(
             view()
                 .p_3()
@@ -377,5 +594,12 @@ mod tests {
             // Top-left finder pattern corner (0, 0) is always dark in standard QR codes.
             assert_eq!(modules.first().copied(), Some(true));
         }
+    }
+
+    #[test]
+    fn embedded_app_icon_decodes_to_exact_rgba_buffer() {
+        let pixels = app_icon_rgba();
+        assert_eq!(pixels.len(), (APP_ICON_SIZE * APP_ICON_SIZE * 4) as usize);
+        assert!(pixels.as_chunks::<4>().0.iter().any(|&[_, _, _, a]| a > 0));
     }
 }
