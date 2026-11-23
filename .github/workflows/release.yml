@@ -37,11 +37,11 @@ jobs:
           - os: macos-latest
             target: ""
             bin_path: target/release/safe-your-eyes
-            asset_name: safe-your-eyes-macos-arm64
+            asset_name: safe-your-eyes-macos-arm64.zip
           - os: macos-latest
             target: x86_64-apple-darwin
             bin_path: target/x86_64-apple-darwin/release/safe-your-eyes
-            asset_name: safe-your-eyes-macos-x86_64
+            asset_name: safe-your-eyes-macos-x86_64.zip
           - os: windows-latest
             target: ""
             bin_path: target/release/safe-your-eyes.exe
@@ -79,7 +79,63 @@ jobs:
             cargo build --release --bin safe-your-eyes
           fi
 
+      - name: Package macOS .app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          APP_DIR="dist/Safe Your Eyes.app"
+          mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+          cp "${{ matrix.bin_path }}" "$APP_DIR/Contents/MacOS/safe-your-eyes"
+          chmod +x "$APP_DIR/Contents/MacOS/safe-your-eyes"
+          cp assets/icons/app-icon.icns "$APP_DIR/Contents/Resources/app-icon.icns"
+          VERSION="$VERSION" APP_DIR="$APP_DIR" python3 - <<'PY'
+          import os, textwrap
+          from pathlib import Path
+
+          plist = textwrap.dedent(f'''\
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>en</string>
+              <key>CFBundleDisplayName</key>
+              <string>Safe Your Eyes</string>
+              <key>CFBundleExecutable</key>
+              <string>safe-your-eyes</string>
+              <key>CFBundleIconFile</key>
+              <string>app-icon.icns</string>
+              <key>CFBundleIdentifier</key>
+              <string>io.github.safeyoureyes.SafeYourEyes</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>Safe Your Eyes</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>{os.environ["VERSION"]}</string>
+              <key>CFBundleVersion</key>
+              <string>{os.environ["VERSION"]}</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>14.0</string>
+              <key>LSUIElement</key>
+              <true/>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+            </dict>
+            </plist>
+          ''')
+          Path(os.environ["APP_DIR"], "Contents", "Info.plist").write_text(plist, encoding="utf-8")
+          PY
+          ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "dist/${{ matrix.asset_name }}"
+          rm -rf "$APP_DIR"
+
       - name: Stage release binary
+        if: runner.os != 'macOS'
         shell: bash
         run: |
           mkdir -p dist
@@ -157,6 +213,12 @@ jobs:
           {
             echo "## Safe Your Eyes Release"
             echo ""
+            echo "### Install on macOS (Homebrew Cask)"
+            echo ""
+            echo '```bash'
+            echo 'brew install --cask --no-quarantine tunglt1810/tap/safe-your-eyes'
+            echo '```'
+            echo ""
             echo "### Downloads & VirusTotal Verification"
             echo ""
             echo "| Binary | SHA-256 | VirusTotal |"
@@ -187,12 +249,13 @@ jobs:
       - name: Update Homebrew Cask formula
         env:
           RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           VERSION="${RELEASE_TAG#v}"
-          ARM_SHA=$(awk '$2 == "safe-your-eyes-macos-arm64" {print $1}' release-assets/SHA256SUMS.txt)
-          INTEL_SHA=$(awk '$2 == "safe-your-eyes-macos-x86_64" {print $1}' release-assets/SHA256SUMS.txt)
+          ARM_SHA=$(awk '$2 == "safe-your-eyes-macos-arm64.zip" {print $1}' release-assets/SHA256SUMS.txt)
+          INTEL_SHA=$(awk '$2 == "safe-your-eyes-macos-x86_64.zip" {print $1}' release-assets/SHA256SUMS.txt)
           if [ -z "$ARM_SHA" ] || [ -z "$INTEL_SHA" ]; then
-            echo "Missing macOS SHA-256 checksums; skipping Cask update"
+            echo "Missing macOS .zip SHA-256 checksums; skipping Cask update"
             exit 0
           fi
           git fetch origin main
@@ -210,26 +273,19 @@ jobs:
               sha256 arm:   "{os.environ["ARM_SHA"]}",
                      intel: "{os.environ["INTEL_SHA"]}"
 
-              url "https://github.com/tunglt1810/safe-your-eyes/releases/download/v#{{version}}/safe-your-eyes-macos-#{{arch}}"
+              url "https://github.com/tunglt1810/safe-your-eyes/releases/download/v#{{version}}/safe-your-eyes-macos-#{{arch}}.zip"
               name "Safe Your Eyes"
               desc "Lightweight cross-platform Rust eye-protection desktop app"
               homepage "https://tunglt1810.github.io/safe-your-eyes/"
 
-              binary "safe-your-eyes-macos-#{{arch}}", target: "safe-your-eyes"
+              app "Safe Your Eyes.app"
+              binary "#{{appdir}}/Safe Your Eyes.app/Contents/MacOS/safe-your-eyes"
 
               zap trash: [
                 "~/Library/Application Support/safe-your-eyes",
                 "~/Library/Caches/safe-your-eyes",
                 "~/Library/LaunchAgents/io.github.safeyoureyes.SafeYourEyes.plist",
               ]
-
-              caveats <<~EOS
-                Start the background daemon with:
-                  safe-your-eyes
-
-                Open the Cozy Settings window with:
-                  safe-your-eyes --settings
-              EOS
             end
           ''')
           Path("Casks").mkdir(exist_ok=True)
@@ -241,4 +297,17 @@ jobs:
             git add Casks/safe-your-eyes.rb
             git commit -m "chore(cask): update safe-your-eyes to ${VERSION} [skip ci]"
             git push origin main
+          fi
+          if [ -n "$HOMEBREW_TAP_TOKEN" ]; then
+            git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/tunglt1810/homebrew-tap.git" tap-repo
+            mkdir -p tap-repo/Casks
+            cp Casks/safe-your-eyes.rb tap-repo/Casks/safe-your-eyes.rb
+            cd tap-repo
+            if ! git diff --quiet || [ -n "$(git status --porcelain)" ]; then
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add Casks/safe-your-eyes.rb
+              git commit -m "chore(cask): update safe-your-eyes to ${VERSION}"
+              git push origin main
+            fi
           fi

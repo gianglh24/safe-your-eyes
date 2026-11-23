@@ -30,8 +30,7 @@ Open the native Cozy Settings window anytime with `safe-your-eyes --settings` or
 ### macOS (Homebrew Cask)
 
 ```bash
-brew tap tunglt1810/safe-your-eyes https://github.com/tunglt1810/safe-your-eyes
-brew install --cask --no-quarantine safe-your-eyes
+brew install --cask --no-quarantine tunglt1810/tap/safe-your-eyes
 ```
 
 ### Prebuilt Binaries (Windows, macOS, Linux — x86_64 & ARM64)
