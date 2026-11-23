@@ -1,65 +1,84 @@
-# A Workday Storyline with Safe Your Eyes
+# Close Your Eyes, Open Your Mind
 
-![A workday with Safe Your Eyes](assets/storyline.gif)
+![Close your eyes, open your mind — Safe Your Eyes workday time-lapse](assets/storyline.gif)
 
-Illustration drawn with [tinycharts](https://github.com/tunglt1810/tinycharts).
-Each panel below matches one beat in the nine-panel comic strip above.
+AI makes us build faster than ever—which also makes it effortless to stare at a screen for hours without blinking.
+Safe Your Eyes protects your vision so you can close your eyes, open your mind, spark sharper creative ideas, and steer AI even more effectively.
+
+Illustrated with [tinycharts](https://github.com/tunglt1810/tinycharts).
+Each section below matches one of the seven parts in the time-lapse above.
 Read the technical details in [the specification](specs/SPEC.md).
 
-## 1. Morning at the Desk
+## 1. 09:00 — AI Flow Begins
 
-Morning sunlight warms your desk beside a hot coffee mug and a curled-up cat.
-You run `safe-your-eyes` in your terminal.
-The single-instance daemon starts in the system tray.
-It uses 2 to 4 MB of RAM and 0% GPU because it creates no graphics context.
+AI supercharges every prompt, diff, and build, making it easy to get pulled into a nonstop sprint.
+You start `safe-your-eyes`, and the single-instance daemon sits quietly in the system tray.
+In `Waiting`, it creates no graphics context and uses 0% GPU while counting down 15 minutes to your first pause.
 
-## 2. Fifteen Minutes of Focus
+## 2. 09:15 — First 15-Second Pause
 
-You write code for 15 minutes while the wall clock ticks forward.
-In the background, `Scheduler` counts down the 900-second `Short` break interval.
-Your screen stays clear, and the daemon keeps graphics memory at zero.
+Ten seconds before the break, a desktop notification appears with a soft synthesized pre-break chime (`PreBreak`).
+At `00:00`, the daemon launches an on-demand native overlay with a cozy dark-roast card and a `00:15` countdown.
+For the first 2 seconds, `shortcut_disable_secs` blocks `Space` and `Esc` so an eager mid-prompt keypress never skips your rest.
+You gently rest your eyes and clear tunnel vision until the post-break chime (`PostBreak`) calls you back and the overlay exits (`0% GPU`).
 
-## 3. Ten-Second Notice and Chime
+## 3. 10:15 — 60-Second Creative Stretch (4:1)
 
-Ten seconds before the break, a desktop notification appears in the corner of your screen.
-At the same time, the daemon plays a soft synthesized two-tone chime (`PreBreak`, C5 to E5).
-You finish your current line of code and lift your hands from the keyboard.
+After four short breaks (75 minutes), `BreakQueue` stages a 60-second `Long` break in the default 4:1 rhythm.
+The `01:00` overlay pulls you away from the screen to stand, stretch, and refill your mug.
+Away from the stream of prompts, your mind has space to connect dots—and the boldest ideas land before you sit back down.
 
-## 4. Cozy Dark-Roast Overlay and 2-Second Lock
+## 4. 11:30 — Live AI Demo (Do Not Disturb)
 
-When the countdown reaches `00:00`, the daemon starts a native child process for the break overlay.
-A dark-roast canvas (`#18140E`) fades in around a `#231D16` card with warm cream text (`#FFFEF7`).
-The `00:15` countdown starts in warm coral (`#EE8F64`).
-For the first 2 seconds, `shortcut_disable_secs` locks `Postpone (Space)` and `Skip (Esc)` so stray keystrokes never close the break.
+You share your sharper plan fullscreen on a live call.
+`DoNotDisturbPolicy` detects fullscreen mode and holds breaks back so your demo runs uninterrupted.
 
-## 5. Lock Opens: Rest or Skip
+## 5. 12:30 — Lunch Reset (Smart Pause)
 
-After 2 seconds, `Postpone (Space)` and `Skip (Esc)` unlock.
-You decide between two actions on the break card.
-You can rest your eyes for 15 seconds, or you can skip to stay on a deadline.
+You step away from the keyboard to recharge over lunch.
+`SmartPausePolicy` detects idle time, moves `Scheduler` into `Resting`, and resets your break cycle and skip counter cleanly when you return.
 
-## 6. Detour: Skip Limit at 2/2
+## 6. 15:15 — Close Your Eyes, Open Your Mind (Skip Limit 2/2)
 
-Today you press `Skip` or `Postpone` twice in a row.
-On the next break, `LimitConsecutiveSkipping` hits `2/2` and locks both buttons.
-The overlay shows `Skipped or postponed 2/2 breaks in a row`.
-This detour returns you straight to the break card so your eyes get real rest.
+Deep in an afternoon AI sprint, you skip or postpone two breaks in a row.
+At `2/2`, `SkipLimitPolicy` locks both `Skip` and `Postpone` on the next break.
+With no escape hatch, you gently close your eyes for 15 seconds—stepping out of reactive prompting, opening your mind, and coming back with a clearer, smarter prompt when the post-break chime rings and resets skips to `0`.
 
-## 7. Look Far Away for 15 Seconds
+## 7. 19:00 — Shipped More, Eyes Still Fresh
 
-You turn toward the window and focus on distant green trees for 15 seconds.
-When the timer reaches `00:00`, a resolving chime (`PostBreak`, G5 to C5) plays and resets consecutive skips to `0`.
-The overlay child process exits immediately, and the operating system releases all graphics memory (`0% GPU`).
-
-## 8. Four Short Breaks, One Long Break
-
-After four short breaks and 75 minutes of work, `BreakQueue` stages a 60-second `Long` break.
-The overlay prompts you to stand up, stretch your back, and refill your tea.
-A full minute away from the screen rests tired eyes and stiff shoulders.
-
-## 9. Clear Eyes at Dusk and Session Persistence
-
-Sunset colors the window at the end of the workday, and your eyes still feel clear.
+At dusk, you shipped better work with AI and still have zero evening eye strain.
 You run `safe-your-eyes --quit` to stop the daemon cleanly.
-When you enable `persist_state`, the daemon writes your `BreakQueue` position to `session.toml` before exit.
-Next morning, the daemon resumes right from your saved break position.
+With `persist_state` enabled, the daemon saves your `BreakQueue` position to `session.toml`, ready to resume tomorrow morning at 09:00.
+
+## Workday State Diagram
+
+```mermaid
+---
+title: "Close your eyes, open your mind"
+---
+stateDiagram-v2
+  [*] --> morning
+  morning: 09:00 AI flow begins
+  short_break: 09:15 first 15s pause
+  long_break: 10:15 60s creative stretch
+  dnd: 11:30 live AI demo (DND)
+  smart_pause: 12:30 lunch reset
+  skip_limit: 15:15 close eyes, open mind (2/2)
+  evening: 19:00 shipped more, eyes fresh
+
+  morning --> short_break: 15m due
+  short_break --> long_break: 4 short breaks done
+  long_break --> dnd: fullscreen demo starts
+  dnd --> smart_pause: demo ends & lunch
+  long_break --> smart_pause: step away for lunch
+  smart_pause --> skip_limit: eager AI sprint [skips < 2]
+  skip_limit --> skip_limit: skip / postpone [skips < 2]
+  skip_limit --> evening: close eyes 15s & ship [skips == 2]
+  evening --> morning: resume saved queue
+```
+
+## Verified Workday Rules
+
+- **Do Not Disturb never interrupts a fullscreen demo**: While a fullscreen presentation is active, Safe Your Eyes holds the break overlay back.
+- **Consecutive skips stop at 2/2**: `SkipLimitPolicy` locks `Skip` and `Postpone` at `2/2` so over-sprinting never costs your eyes a real 15-second rest.
+- **Smart Pause resets cleanly after lunch**: Stepping away for an extended idle period clears consecutive skips and leaves no overlay open.

@@ -1,20 +1,25 @@
 # Safe Your Eyes
 
-Safe Your Eyes is a small Rust desktop application that protects your eyes on macOS, Windows, and Linux.
-It follows the break cadence of [SafeEyes](https://github.com/slgobinath/safeeyes), renders native controls through [Native Shell (`longbridge/nsh`)](https://github.com/longbridge/nsh), and applies the [Cozy Design System](https://github.com/tunglt1810/cozy).
+AI makes us work faster than ever—so it is easy to get carried away and strain your eyes.
+Safe Your Eyes is a lightweight, cross-platform Rust desktop app that reminds you to pause, close your eyes to open your mind, spark sharper creative ideas, and put AI to even better use.
+Inspired by [SafeEyes](https://github.com/slgobinath/safeeyes), built with native controls via [Native Shell (`longbridge/nsh`)](https://github.com/longbridge/nsh), and styled with the [Cozy Design System](https://github.com/tunglt1810/cozy).
 
-![Safe Your Eyes Cozy UI demo](docs/assets/ui-demo.gif)
+![Close your eyes, open your mind — Safe Your Eyes workday time-lapse](docs/assets/storyline.gif)
 
-![A workday with Safe Your Eyes](docs/assets/storyline.gif)
-
-Read the 9-beat story in [docs/STORYLINE.md](docs/STORYLINE.md). Illustration drawn with [tinycharts](https://github.com/tunglt1810/tinycharts).
+Read the 7-part workday story and state diagram in [docs/STORYLINE.md](docs/STORYLINE.md). Illustrated with [tinycharts](https://github.com/tunglt1810/tinycharts).
 
 ## Features
 
-- **Single binary (`safe-your-eyes`)**: Runs the background daemon, CLI client, and on-demand GUI subprocesses from one compiled file.
-- **No `tokio` runtime**: Uses `std::thread`, non-blocking local IPC, and native OS adapters.
-- **[Cozy Design System](https://github.com/tunglt1810/cozy)**: Uses warm oatmeal (`#FAEBDA`) and espresso (`#261101`) in Light mode, and dark roast (`#18140E`) and warm cream (`#FFFEF7`) in Dark mode. The Settings window includes a Floating Sage Sidebar (`#C3CBB9` / `#29332A`), Pastel KPI summary cards, WCAG AAA coral buttons (`#EF8F63`), and Cozy spring/bezier motion with OS reduced-motion support.
-- **Smart policies**: Supports strict break mode, Smart Pause on idle, Do Not Disturb (fullscreen, battery, window rules), consecutive skip limits, and synthesized PCM WAV chimes.
+- **Gentle break cadence**: Default 15-minute / 15-second short breaks and 75-minute / 60-second long breaks (4:1 ratio), with a 10-second pre-break notice, synthesized PCM WAV chimes, and a 2-second key lock to stop accidental skips.
+- **Smart workday policies**: Smart Pause on idle, Do Not Disturb (fullscreen apps, battery power, window rules), strict break mode, consecutive skip limits (default 2/2), and optional session persistence across restarts.
+- **Lightweight single binary (`safe-your-eyes`)**: Bundles the background daemon, CLI client, and on-demand GUI subprocesses with no `tokio` runtime, keeping GPU usage at 0% while waiting in the system tray.
+- **Native Cozy UI**: Light and Dark themes from the [Cozy Design System](https://github.com/tunglt1810/cozy), featuring a sage sidebar, pastel summary cards, high-contrast coral actions, and reduced-motion support on macOS, Windows, and Linux.
+
+## UI Preview
+
+Open the native Cozy Settings window anytime with `safe-your-eyes --settings` or from the system tray:
+
+![Safe Your Eyes Cozy UI preview](docs/assets/ui-demo.gif)
 
 ## Prerequisites
 
@@ -26,7 +31,7 @@ Read the 9-beat story in [docs/STORYLINE.md](docs/STORYLINE.md). Illustration dr
 ## Build and Test
 
 ```bash
-# Run all unit tests and headless NSH UI tests
+# Run unit tests and headless NSH UI tests
 cargo test --workspace
 
 # Build the debug binary
