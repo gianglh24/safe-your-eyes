@@ -25,6 +25,19 @@ Open the native Cozy Settings window anytime with `safe-your-eyes --settings` or
 
 ![Safe Your Eyes Cozy UI preview](docs/assets/ui-demo.gif)
 
+## Install
+
+### macOS (Homebrew Cask)
+
+```bash
+brew tap tunglt1810/safe-your-eyes https://github.com/tunglt1810/safe-your-eyes
+brew install --cask --no-quarantine safe-your-eyes
+```
+
+### Prebuilt Binaries (Windows, macOS, Linux — x86_64 & ARM64)
+
+Download the latest release binary from [GitHub Releases](https://github.com/tunglt1810/safe-your-eyes/releases). No administrator privileges or `sudo` required.
+
 ## Prerequisites
 
 - Rust 1.97 or newer (Rust 2024 edition)
