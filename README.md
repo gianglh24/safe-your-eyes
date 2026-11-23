@@ -1,5 +1,9 @@
 # Safe Your Eyes
 
+[![CI](https://github.com/tunglt1810/safe-your-eyes/actions/workflows/ci.yml/badge.svg)](https://github.com/tunglt1810/safe-your-eyes/actions/workflows/ci.yml)
+[![VirusTotal Scan](https://img.shields.io/badge/VirusTotal-SHA256%20Scanned-394EFF?logo=virustotal&logoColor=white)](https://github.com/tunglt1810/safe-your-eyes/actions/workflows/ci.yml)
+[![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
+
 AI makes us work faster than ever—so it is easy to get carried away and strain your eyes.
 Safe Your Eyes is a lightweight, cross-platform Rust desktop app that reminds you to pause, close your eyes to open your mind, spark sharper creative ideas, and put AI to even better use.
 Inspired by [SafeEyes](https://github.com/slgobinath/safeeyes), built with native controls via [Native Shell (`longbridge/nsh`)](https://github.com/longbridge/nsh), and styled with the [Cozy Design System](https://github.com/tunglt1810/cozy).
@@ -11,7 +15,7 @@ Read the 7-part workday story and state diagram in [docs/STORYLINE.md](docs/STOR
 ## Features
 
 - **Gentle break cadence**: Default 15-minute / 15-second short breaks and 75-minute / 60-second long breaks (4:1 ratio), with a 10-second pre-break notice, synthesized PCM WAV chimes, and a 2-second key lock to stop accidental skips.
-- **Smart workday policies**: Smart Pause on idle, Do Not Disturb (fullscreen apps, battery power, window rules), strict break mode, consecutive skip limits (default 2/2), and optional session persistence across restarts.
+- **Smart workday policies**: Smart Pause on idle, Do Not Disturb (fullscreen apps, battery power, window rules), strict break mode, consecutive skip limits (default 2/2), optional session persistence across restarts, and user-level OS login autostart toggle.
 - **Lightweight single binary (`safe-your-eyes`)**: Bundles the background daemon, CLI client, and on-demand GUI subprocesses with no `tokio` runtime, keeping GPU usage at 0% while waiting in the system tray.
 - **Native Cozy UI**: Light and Dark themes from the [Cozy Design System](https://github.com/tunglt1810/cozy), featuring a sage sidebar, pastel summary cards, high-contrast coral actions, and reduced-motion support on macOS, Windows, and Linux.
 
@@ -77,6 +81,14 @@ safe-your-eyes --quit
 ## Specification
 
 Read the full product, architecture, Cozy design, and CLI specification in [docs/specs/SPEC.md](docs/specs/SPEC.md).
+
+## Code Signing Policy
+
+Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- **Maintainers & Roles**: Committers, Reviewers, and Approvers: [@tunglt1810](https://github.com/tunglt1810).
+- **Privacy Policy**: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+- **Project Website**: [https://tunglt1810.github.io/safe-your-eyes/](https://tunglt1810.github.io/safe-your-eyes/)
 
 ## Support
 

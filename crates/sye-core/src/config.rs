@@ -159,6 +159,7 @@ pub struct Config {
     pub shortcut_disable_secs: u64,
     pub fade_in_ms: u64,
     pub persist_state: bool,
+    pub autostart: bool,
     pub smart_pause: SmartPauseConfig,
     pub do_not_disturb: DoNotDisturbConfig,
     pub audible_alert: AudibleAlertConfig,
@@ -183,6 +184,7 @@ impl Default for Config {
             shortcut_disable_secs: 2,
             fade_in_ms: 1500,
             persist_state: false,
+            autostart: false,
             smart_pause: SmartPauseConfig::default(),
             do_not_disturb: DoNotDisturbConfig::default(),
             audible_alert: AudibleAlertConfig::default(),
@@ -438,6 +440,7 @@ mod tests {
         assert_eq!(cfg.shortcut_disable_secs, 2);
         assert_eq!(cfg.fade_in_ms, 1500);
         assert!(!cfg.persist_state);
+        assert!(!cfg.autostart);
         assert_eq!(cfg.short_breaks.len(), 13);
         assert_eq!(cfg.long_breaks.len(), 6);
         assert_eq!(cfg.validate(), Ok(()));

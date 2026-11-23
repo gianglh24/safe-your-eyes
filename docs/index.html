@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Safe Your Eyes — Lightweight Cross-Platform Eye-Protection App</title>
+  <meta name="description" content="Safe Your Eyes is a lightweight, open-source Rust desktop app for Windows, macOS, and Linux that reminds you to take regular eye breaks.">
+  <style>
+    :root {
+      --bg-body: #FAEBDA;
+      --bg-surface: #FBF1E1;
+      --bg-muted: #F3DFC8;
+      --sidebar-bg: #C3CBB9;
+      --accent: #EF8F63;
+      --on-accent: #261101;
+      --text-primary: #261101;
+      --text-secondary: #5B4C3B;
+      --border: #E6D2BC;
+      --kpi-sage: #E2DEC4;
+      --kpi-peach: #FBCBB4;
+      --kpi-butter: #FAE1B5;
+      --kpi-mist: #D2D7DA;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-body: #18140E;
+        --bg-surface: #231D16;
+        --bg-muted: #30261D;
+        --sidebar-bg: #29332A;
+        --accent: #EE8F64;
+        --on-accent: #18140E;
+        --text-primary: #FFFEF7;
+        --text-secondary: #C2B7B1;
+        --border: #3A3026;
+        --kpi-sage: #31392C;
+        --kpi-peach: #432F28;
+        --kpi-butter: #443A26;
+        --kpi-mist: #2B333D;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      background: var(--bg-body);
+      color: var(--text-primary);
+      line-height: 1.6;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 40px 20px 64px;
+    }
+
+    .hero {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 36px 32px;
+      text-align: center;
+    }
+
+    .badge-row {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      background: var(--sidebar-bg);
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(2rem, 4vw, 2.75rem);
+      line-height: 1.15;
+    }
+
+    .lead {
+      max-width: 680px;
+      margin: 0 auto 24px;
+      color: var(--text-secondary);
+      font-size: 1.05rem;
+    }
+
+    .actions {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 12px 22px;
+      border-radius: 9999px;
+      font-weight: 700;
+      text-decoration: none;
+      transition: transform 0.15s ease;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--on-accent);
+    }
+
+    .btn-secondary {
+      background: var(--bg-muted);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+    }
+
+    .media-frame {
+      margin: 0;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: var(--bg-body);
+    }
+
+    .media-frame img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 14px;
+      margin: 28px 0;
+    }
+
+    .card {
+      border-radius: 18px;
+      padding: 20px;
+      border: 1px solid var(--border);
+    }
+
+    .card h3 {
+      margin: 0 0 6px;
+      font-size: 1rem;
+    }
+
+    .card p {
+      margin: 0;
+      font-size: 0.92rem;
+      color: var(--text-secondary);
+    }
+
+    .sage { background: var(--kpi-sage); }
+    .peach { background: var(--kpi-peach); }
+    .butter { background: var(--kpi-butter); }
+    .mist { background: var(--kpi-mist); }
+
+    .section {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 26px 28px;
+      margin-top: 22px;
+    }
+
+    .section h2 {
+      margin: 0 0 12px;
+      font-size: 1.35rem;
+    }
+
+    .section p, .section li {
+      color: var(--text-secondary);
+    }
+
+    .section ul {
+      padding-left: 20px;
+      margin: 8px 0 0;
+    }
+
+    footer {
+      margin-top: 32px;
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <section class="hero">
+      <div class="badge-row">
+        <span class="badge">Rust 2024 Single Binary</span>
+        <span class="badge">Windows · macOS · Linux</span>
+        <span class="badge">GPL-2.0-only</span>
+      </div>
+      <h1>Safe Your Eyes</h1>
+      <p class="lead">
+        A lightweight, cross-platform Rust desktop application that reminds you to take short and long eye breaks,
+        with native controls, 0% idle GPU usage, Smart Pause, Do Not Disturb, and no administrator privileges required.
+      </p>
+      <div class="actions">
+        <a class="btn btn-primary" href="https://github.com/tunglt1810/safe-your-eyes/releases">Download Releases</a>
+        <a class="btn btn-secondary" href="https://github.com/tunglt1810/safe-your-eyes">View Source on GitHub</a>
+      </div>
+      <figure class="media-frame">
+        <img src="assets/storyline.gif" alt="Safe Your Eyes workday time-lapse">
+      </figure>
+    </section>
+
+    <section class="grid" aria-label="Highlights">
+      <article class="card sage">
+        <h3>Gentle Break Cadence</h3>
+        <p>15-minute / 15-second short breaks and 75-minute / 60-second long breaks (4:1 ratio), pre-break notices, synthesized chimes, and a 2-second key lock.</p>
+      </article>
+      <article class="card peach">
+        <h3>Smart Policies</h3>
+        <p>Smart Pause when idle, Do Not Disturb for fullscreen apps or battery power, strict break mode, skip limits, and user-level OS login autostart.</p>
+      </article>
+      <article class="card butter">
+        <h3>0% Idle GPU Footprint</h3>
+        <p>Single binary with no Tokio runtime. The background daemon spawns native UI subprocesses only during breaks or Settings.</p>
+      </article>
+      <article class="card mist">
+        <h3>No Admin Required</h3>
+        <p>Runs in user space with per-user config, session, IPC socket, and login startup entries on Windows, macOS, and Linux.</p>
+      </article>
+    </section>
+
+    <section class="section">
+      <h2>Native Cozy Settings UI</h2>
+      <p>Customize break intervals, policies, exercises, theme (Light, Dark, or System), and login autostart with native OS controls.</p>
+      <figure class="media-frame">
+        <img src="assets/ui-demo.gif" alt="Safe Your Eyes Cozy Settings UI preview">
+      </figure>
+    </section>
+
+    <section class="section" id="code-signing-policy">
+      <h2>Code Signing Policy</h2>
+      <p>
+        Free code signing provided by <a href="https://signpath.io/">SignPath.io</a>, certificate by
+        <a href="https://signpath.org/">SignPath Foundation</a>.
+      </p>
+      <ul>
+        <li><strong>Source &amp; Build Transparency</strong>: All official binaries are built from the public GitHub repository (<a href="https://github.com/tunglt1810/safe-your-eyes">tunglt1810/safe-your-eyes</a>) using public GitHub Actions workflows.</li>
+        <li><strong>Maintainers &amp; Roles</strong>: Committers, Reviewers, and Approvers: <a href="https://github.com/tunglt1810">@tunglt1810</a>.</li>
+        <li><strong>License</strong>: Licensed under the OSI-approved <strong>GPL-2.0-only</strong> license with no proprietary components.</li>
+      </ul>
+    </section>
+
+    <section class="section" id="privacy-policy">
+      <h2>Privacy Policy</h2>
+      <p>
+        This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+      </p>
+    </section>
+
+    <footer>
+      <p>
+        Safe Your Eyes is open-source software under GPL-2.0-only ·
+        <a href="https://github.com/tunglt1810/safe-your-eyes">GitHub</a> ·
+        <a href="https://buymeacoffee.com/bbeeezzzzz">Buy Me a Coffee</a>
+      </p>
+    </footer>
+  </main>
+</body>
+</html>

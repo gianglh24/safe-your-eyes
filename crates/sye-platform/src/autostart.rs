@@ -76,6 +76,40 @@ impl AutostartManager {
             Err(err) => Err(PlatformError::Io(err.to_string())),
         }
     }
+
+    /// Synchronizes the autostart file on disk with `enabled`.
+    pub fn sync(&self, enabled: bool, entry: &AutostartEntry) -> Result<(), PlatformError> {
+        if enabled {
+            self.enable(entry)
+        } else {
+            self.disable()
+        }
+    }
+}
+
+/// Synchronizes the current user's OS autostart entry for the running `safe-your-eyes` binary.
+pub fn sync_system_autostart(
+    enabled: bool,
+    custom_config: Option<&Path>,
+) -> Result<(), PlatformError> {
+    let mgr = AutostartManager::system_default()?;
+    if !enabled {
+        return mgr.disable();
+    }
+    let exe = std::env::current_exe().map_err(|err| PlatformError::Io(err.to_string()))?;
+    let mut entry = AutostartEntry::for_safe_your_eyes(exe);
+    if let Some(cfg_path) = custom_config {
+        let is_default = crate::AppPaths::resolve()
+            .map(|p| p.config_file == cfg_path)
+            .unwrap_or(false);
+        if !is_default {
+            entry.args = vec![
+                "--config".to_owned(),
+                cfg_path.to_string_lossy().into_owned(),
+            ];
+        }
+    }
+    mgr.enable(&entry)
 }
 
 /// Resolves the standard per-user autostart file path for the current OS.
@@ -313,6 +347,11 @@ mod tests {
         assert!(!mgr.is_enabled());
         // Second disable must succeed idempotently.
         mgr.disable()?;
+
+        mgr.sync(true, &entry)?;
+        assert!(mgr.is_enabled());
+        mgr.sync(false, &entry)?;
+        assert!(!mgr.is_enabled());
         Ok(())
     }
 }

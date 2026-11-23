@@ -40,6 +40,9 @@ pub(crate) fn run_daemon(paths: AppPaths, headless: bool) -> ExitCode {
     if let Some(err) = load_err {
         eprintln!("Warning: falling back to default config ({err})");
     }
+    if !headless {
+        let _ = sye_platform::sync_system_autostart(config.autostart, Some(&paths.config_file));
+    }
 
     let seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)

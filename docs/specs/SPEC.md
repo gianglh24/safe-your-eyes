@@ -164,6 +164,7 @@ The application stores configuration in `config.toml` with `schema_version = 1`.
 
 When `config.toml` is missing or invalid, `Config::load_or_default` returns `Config::default()` so the daemon still starts.
 When `persist_state` is `true`, the daemon writes `SessionState` to `session.toml` using `BreakQueue::persisted_short_index()` and `BreakQueue::persisted_long_index()` so restarts resume at the staged break.
+When `autostart` is `true`, saving Settings or starting the non-headless daemon writes a per-user OS login entry (`~/.config/autostart/safe-your-eyes.desktop` on Linux, `~/Library/LaunchAgents/io.github.safeyoureyes.SafeYourEyes.plist` on macOS, or `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\safe-your-eyes.cmd` on Windows). When `autostart` is `false`, the application removes that entry.
 
 ## 9. Audio Chime and Local IPC
 

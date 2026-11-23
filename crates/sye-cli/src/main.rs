@@ -86,13 +86,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        CommandMode::InternalSettings => match sye_ui::run_settings(paths.config_file) {
-            Ok(_) => ExitCode::SUCCESS,
-            Err(err) => {
-                eprintln!("{err}");
-                ExitCode::FAILURE
-            }
-        },
+        CommandMode::InternalSettings => run_settings_and_sync_autostart(&paths.config_file),
         CommandMode::Daemon => daemon::run_daemon(paths, args.headless),
         CommandMode::Status { json } => send_and_print_status(&paths, json),
         CommandMode::Enable => send_simple_command(&paths, IpcCommand::Enable),
@@ -120,13 +114,7 @@ fn main() -> ExitCode {
                     ExitCode::FAILURE
                 }
                 Ok(IpcResponse::Status(_)) => ExitCode::SUCCESS,
-                Err(IpcError::NotRunning) => match sye_ui::run_settings(paths.config_file) {
-                    Ok(_) => ExitCode::SUCCESS,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        ExitCode::FAILURE
-                    }
-                },
+                Err(IpcError::NotRunning) => run_settings_and_sync_autostart(&paths.config_file),
                 Err(err) => {
                     eprintln!("{err}");
                     ExitCode::FAILURE
@@ -134,6 +122,25 @@ fn main() -> ExitCode {
             }
         }
         CommandMode::Quit => send_simple_command(&paths, IpcCommand::Quit),
+    }
+}
+
+fn run_settings_and_sync_autostart(config_file: &std::path::Path) -> ExitCode {
+    match sye_ui::run_settings(config_file.to_path_buf()) {
+        Ok(sye_ui::SettingsOutcome::Saved) => {
+            if let Ok(cfg) = Config::load_from_path(config_file)
+                && let Err(err) =
+                    sye_platform::sync_system_autostart(cfg.autostart, Some(config_file))
+            {
+                eprintln!("Warning: failed to synchronize autostart entry: {err}");
+            }
+            ExitCode::SUCCESS
+        }
+        Ok(sye_ui::SettingsOutcome::Cancelled) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

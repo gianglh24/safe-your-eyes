@@ -22,7 +22,7 @@ pub mod tray;
 pub use audio::OsAudioPlayer;
 pub use autostart::{
     AutostartEntry, AutostartManager, default_autostart_path, render_linux_desktop_entry,
-    render_macos_launch_agent_plist, render_windows_startup_cmd,
+    render_macos_launch_agent_plist, render_windows_startup_cmd, sync_system_autostart,
 };
 pub use clock::SystemClock;
 pub use dnd::SystemDndProvider;

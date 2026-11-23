@@ -45,6 +45,7 @@ def test_t1_cli_02_print_default_config(env: SyeTestEnv) -> None:
         "shortcut_disable_secs": 2,
         "fade_in_ms": 1500,
         "persist_state": False,
+        "autostart": False,
     }
     for key, expected in expected_scalars.items():
         assert key in cfg, f"Missing default config key: {key}"

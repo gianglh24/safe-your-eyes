@@ -369,7 +369,7 @@ fn timing_section(vm: Signal<SettingsViewModel>) -> impl IntoElement {
                 .gap_3()
                 .child(section_header(
                     "Transitions & Controls",
-                    "Fine-tune warnings, fade-in speed, postpone length, and session persistence.",
+                    "Fine-tune warnings, fade-in speed, postpone length, session persistence, and OS startup.",
                 ))
                 .child(number_field_row(
                     "Pre-break warning",
@@ -404,6 +404,11 @@ fn timing_section(vm: Signal<SettingsViewModel>) -> impl IntoElement {
                     "Persist session across restarts",
                     move || vm.with(|m| m.config.persist_state),
                     move |v| vm.update(|m| m.config.persist_state = v),
+                ))
+                .child(cozy_switch(
+                    "Launch at login (startup)",
+                    move || vm.with(|m| m.config.autostart),
+                    move |v| vm.update(|m| m.config.autostart = v),
                 )),
         )
 }
@@ -1147,6 +1152,7 @@ mod tests {
         vm.config.shortcut_disable_secs = 3;
         vm.config.fade_in_ms = 800;
         vm.config.persist_state = true;
+        vm.config.autostart = true;
         vm.config.smart_pause.enabled = false;
         vm.config.smart_pause.idle_threshold_secs = 30;
         vm.config.smart_pause.postpone_if_active = true;
@@ -1320,6 +1326,7 @@ mod tests {
         app.wait_for("Safe Your Eyes")?;
         assert!(app.shows("Break Schedule"));
         assert!(app.shows("Short Break"));
+        assert!(app.shows("Launch at login (startup)"));
 
         app.press("Policies")?;
         app.wait_for("Break Enforcement")?;
