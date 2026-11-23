@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bin_path: target/release/safe-your-eyes
+            asset_name: safe-your-eyes-linux-x86_64
+          - os: macos-latest
+            bin_path: target/release/safe-your-eyes
+            asset_name: safe-your-eyes-macos-arm64
+          - os: windows-latest
+            bin_path: target/release/safe-your-eyes.exe
+            asset_name: safe-your-eyes-windows-x86_64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux GTK 4 dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgtk-4-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --bin safe-your-eyes
+
+      - name: Stage release binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.bin_path }}" "dist/${{ matrix.asset_name }}"
+
+      - name: Sign Windows binary with SignPath
+        if: runner.os == 'Windows' && env.SIGNPATH_API_TOKEN != ''
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORG_ID: ${{ vars.SIGNPATH_ORG_ID || 'df8415de-63eb-40e3-9c26-ac30ed6b70d2' }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG || 'safe-your-eyes' }}
+          SIGNPATH_POLICY_SLUG: ${{ vars.SIGNPATH_POLICY_SLUG || 'Safe_your_eyes_Test_Signing' }}
+        run: |
+          Install-Module -Name SignPath -Scope CurrentUser -Force
+          $unsigned = "dist/${{ matrix.asset_name }}"
+          $signed = "dist/signed-${{ matrix.asset_name }}"
+          Submit-SigningRequest `
+            -OrganizationId $env:SIGNPATH_ORG_ID `
+            -ApiToken $env:SIGNPATH_API_TOKEN `
+            -ProjectSlug $env:SIGNPATH_PROJECT_SLUG `
+            -SigningPolicySlug $env:SIGNPATH_POLICY_SLUG `
+            -InputArtifactPath $unsigned `
+            -OutputArtifactPath $signed `
+            -WaitForCompletion
+          Move-Item -Force $signed $unsigned
+          $sig = Get-AuthenticodeSignature $unsigned
+          Write-Host "Authenticode status: $($sig.Status) | Subject: $($sig.SignerCertificate.Subject)"
+
+      - name: Calculate SHA-256 and scan with VirusTotal
+        shell: bash
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+        run: |
+          ASSET="dist/${{ matrix.asset_name }}"
+          SHA256=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$ASSET")
+          echo "$SHA256  ${{ matrix.asset_name }}" > "dist/${{ matrix.asset_name }}.sha256"
+          echo "### Release Binary (${{ matrix.asset_name }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SHA-256**: \`$SHA256\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **VirusTotal Report**: https://www.virustotal.com/gui/file/$SHA256" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$VT_API_KEY" ]; then
+            curl --silent --show-error --fail \
+              --request POST \
+              --url https://www.virustotal.com/api/v3/files \
+              --header "x-apikey: $VT_API_KEY" \
+              --form "file=@$ASSET" > /dev/null
+            echo "- **VirusTotal Upload**: Submitted to VirusTotal API v3" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          path: dist/*
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Prepare checksums and release notes
+        run: |
+          cd release-assets
+          cat *.sha256 | sort -k2 > SHA256SUMS.txt
+          rm -f *.sha256
+          {
+            echo "## Safe Your Eyes Release"
+            echo ""
+            echo "### Downloads & VirusTotal Verification"
+            echo ""
+            echo "| Binary | SHA-256 | VirusTotal |"
+            echo "|---|---|---|"
+            while read -r hash file; do
+              echo "| \`$file\` | \`$hash\` | [View Report](https://www.virustotal.com/gui/file/$hash) |"
+            done < SHA256SUMS.txt
+            echo ""
+            echo "### Code Signing"
+            echo ""
+            echo "Windows binaries are signed via [SignPath.io](https://signpath.io/). See [Code Signing Policy](https://tunglt1810.github.io/safe-your-eyes/#code-signing-policy)."
+          } > ../release-notes.md
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+            gh release edit "$RELEASE_TAG" --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --title "Safe Your Eyes $RELEASE_TAG" \
+              --notes-file release-notes.md
+          fi
