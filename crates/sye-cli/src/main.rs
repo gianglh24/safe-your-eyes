@@ -88,32 +88,45 @@ fn main() -> ExitCode {
         }
         CommandMode::InternalSettings => run_settings_and_sync_autostart(&paths.config_file),
         CommandMode::Daemon => daemon::run_daemon(paths, args.headless),
-        CommandMode::Status { json } => send_and_print_status(&paths, json),
-        CommandMode::Enable => send_simple_command(&paths, IpcCommand::Enable),
+        CommandMode::Status { json } => send_ipc_command(
+            &paths,
+            IpcCommand::Status,
+            if json {
+                StatusFormat::Json
+            } else {
+                StatusFormat::Human
+            },
+        ),
+        CommandMode::Enable => send_ipc_command(&paths, IpcCommand::Enable, StatusFormat::Human),
         CommandMode::Disable { minutes } => {
-            send_simple_command(&paths, IpcCommand::Disable { minutes })
+            send_ipc_command(&paths, IpcCommand::Disable { minutes }, StatusFormat::Human)
         }
-        CommandMode::TakeBreak => send_simple_command(&paths, IpcCommand::TakeBreak { kind: None }),
-        CommandMode::ShortBreak => send_simple_command(
+        CommandMode::TakeBreak => send_ipc_command(
+            &paths,
+            IpcCommand::TakeBreak { kind: None },
+            StatusFormat::Human,
+        ),
+        CommandMode::ShortBreak => send_ipc_command(
             &paths,
             IpcCommand::TakeBreak {
                 kind: Some(BreakType::Short),
             },
+            StatusFormat::Human,
         ),
-        CommandMode::LongBreak => send_simple_command(
+        CommandMode::LongBreak => send_ipc_command(
             &paths,
             IpcCommand::TakeBreak {
                 kind: Some(BreakType::Long),
             },
+            StatusFormat::Human,
         ),
         CommandMode::Settings => {
             match IpcClient::send_command(&paths.socket_path, &IpcCommand::OpenSettings) {
-                Ok(IpcResponse::Ok { .. }) => ExitCode::SUCCESS,
+                Ok(IpcResponse::Ok { .. }) | Ok(IpcResponse::Status(_)) => ExitCode::SUCCESS,
                 Ok(IpcResponse::Error { message, .. }) => {
                     eprintln!("{message}");
                     ExitCode::FAILURE
                 }
-                Ok(IpcResponse::Status(_)) => ExitCode::SUCCESS,
                 Err(IpcError::NotRunning) => run_settings_and_sync_autostart(&paths.config_file),
                 Err(err) => {
                     eprintln!("{err}");
@@ -121,7 +134,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        CommandMode::Quit => send_simple_command(&paths, IpcCommand::Quit),
+        CommandMode::Quit => send_ipc_command(&paths, IpcCommand::Quit, StatusFormat::Human),
     }
 }
 
@@ -144,10 +157,16 @@ fn run_settings_and_sync_autostart(config_file: &std::path::Path) -> ExitCode {
     }
 }
 
-fn send_and_print_status(paths: &AppPaths, json: bool) -> ExitCode {
-    match IpcClient::send_command(&paths.socket_path, &IpcCommand::Status) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatusFormat {
+    Human,
+    Json,
+}
+
+fn send_ipc_command(paths: &AppPaths, cmd: IpcCommand, status_format: StatusFormat) -> ExitCode {
+    match IpcClient::send_command(&paths.socket_path, &cmd) {
         Ok(IpcResponse::Status(snapshot)) => {
-            if json {
+            if status_format == StatusFormat::Json {
                 match serde_json::to_string(&snapshot) {
                     Ok(line) => {
                         println!("{line}");
@@ -163,37 +182,10 @@ fn send_and_print_status(paths: &AppPaths, json: bool) -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
-        Ok(IpcResponse::Error { message, .. }) => {
-            eprintln!("{message}");
-            ExitCode::FAILURE
-        }
         Ok(IpcResponse::Ok { message }) => {
             if let Some(msg) = message {
                 println!("{msg}");
             }
-            ExitCode::SUCCESS
-        }
-        Err(IpcError::NotRunning) => {
-            eprintln!("Safe Your Eyes is not running");
-            ExitCode::FAILURE
-        }
-        Err(err) => {
-            eprintln!("{err}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn send_simple_command(paths: &AppPaths, cmd: IpcCommand) -> ExitCode {
-    match IpcClient::send_command(&paths.socket_path, &cmd) {
-        Ok(IpcResponse::Ok { message }) => {
-            if let Some(msg) = message {
-                println!("{msg}");
-            }
-            ExitCode::SUCCESS
-        }
-        Ok(IpcResponse::Status(snapshot)) => {
-            println!("{}", daemon::format_human_status(&snapshot));
             ExitCode::SUCCESS
         }
         Ok(IpcResponse::Error { message, .. }) => {
