@@ -20,21 +20,36 @@ env:
 
 jobs:
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.asset_name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
+            target: ""
             bin_path: target/release/safe-your-eyes
             asset_name: safe-your-eyes-linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: ""
+            bin_path: target/release/safe-your-eyes
+            asset_name: safe-your-eyes-linux-aarch64
           - os: macos-latest
+            target: ""
             bin_path: target/release/safe-your-eyes
             asset_name: safe-your-eyes-macos-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            bin_path: target/x86_64-apple-darwin/release/safe-your-eyes
+            asset_name: safe-your-eyes-macos-x86_64
           - os: windows-latest
+            target: ""
             bin_path: target/release/safe-your-eyes.exe
             asset_name: safe-your-eyes-windows-x86_64.exe
+          - os: windows-11-arm
+            target: ""
+            bin_path: target/release/safe-your-eyes.exe
+            asset_name: safe-your-eyes-windows-arm64.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -47,12 +62,22 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.asset_name }}
 
       - name: Build release binary
-        run: cargo build --release --bin safe-your-eyes
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --release --target "${{ matrix.target }}" --bin safe-your-eyes
+          else
+            cargo build --release --bin safe-your-eyes
+          fi
 
       - name: Stage release binary
         shell: bash
@@ -107,7 +132,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.os }}
+          name: release-${{ matrix.asset_name }}
           path: dist/*
 
   publish-release:
@@ -142,7 +167,7 @@ jobs:
             echo ""
             echo "### Code Signing"
             echo ""
-            echo "Windows binaries are signed via [SignPath.io](https://signpath.io/). See [Code Signing Policy](https://tunglt1810.github.io/safe-your-eyes/#code-signing-policy)."
+            echo "Windows binaries (x86_64 & ARM64) are signed via [SignPath.io](https://signpath.io/). See [Code Signing Policy](https://tunglt1810.github.io/safe-your-eyes/#code-signing-policy)."
           } > ../release-notes.md
 
       - name: Create or update GitHub Release
