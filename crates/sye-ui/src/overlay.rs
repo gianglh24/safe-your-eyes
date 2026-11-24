@@ -4,7 +4,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nsh_base::button;
-use nsh_core::element::desktop::quit;
+use nsh_core::desktop::{
+    MainWindowOptions, WindowAttributes, WindowFrameStyle, WindowKind, WindowLevel, WindowPosition,
+    Workspaces,
+};
+use nsh_core::element::desktop::{current_window, displays, quit};
 use nsh_core::prelude::*;
 use sye_core::config::BreakType;
 use sye_core::scheduler::{OverlayOutcome, OverlayRequest};
@@ -241,49 +245,70 @@ struct OverlayLaunch {
 
 static OVERLAY_LAUNCH: Mutex<Option<OverlayLaunch>> = Mutex::new(None);
 
-/// Builds the Cozy break overlay surface for both desktop runs and headless tests.
-pub(crate) fn build_overlay_view(
-    request: OverlayRequest,
-    outcome_sink: Arc<Mutex<Option<OverlayOutcome>>>,
-    quit_on_finish: bool,
+fn overlay_main_window_options_for_primary(
+    primary: Option<crate::MonitorRect>,
+) -> MainWindowOptions {
+    let mut attrs = WindowAttributes::default();
+    attrs.frame = Some(WindowFrameStyle::None);
+    attrs.level = Some(WindowLevel::AboveDock);
+    attrs.workspaces = Some(Workspaces::All);
+    attrs.resizable = Some(false);
+    attrs.movable = Some(false);
+    attrs.minimizable = Some(false);
+    attrs.maximizable = Some(false);
+    attrs.closable = Some(false);
+    attrs.focusable = Some(true);
+    attrs.activate = Some(true);
+    attrs.close_on_press = Some(false);
+    attrs.taskbar = Some(false);
+    attrs.shadow = Some(false);
+
+    let (width, height) = primary.map_or((1920.0, 1080.0), |rect| (rect.width, rect.height));
+
+    let mut main_window = MainWindowOptions::default();
+    main_window.default_size = Some(size(px(width), px(height)));
+    if let Some(rect) = primary {
+        main_window.default_position = Some(WindowPosition::At(point(px(rect.x), px(rect.y))));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Avoid `WindowMode::FullScreen` on macOS: AppKit's `toggleFullScreen:` conflicts with
+        // `Workspaces::All` and triggers a slow Space slide animation instead of instant cover.
+        main_window.default_mode = Some(nsh_core::desktop::WindowMode::FullScreen);
+    }
+    main_window.attributes = attrs;
+    main_window
+}
+
+fn overlay_main_window_options() -> MainWindowOptions {
+    let plan = crate::monitors::plan_overlay_viewports(&crate::monitors::detect_monitors());
+    overlay_main_window_options_for_primary(plan.primary)
+}
+
+fn secondary_window_attributes() -> WindowAttributes {
+    let mut attrs = WindowAttributes::default();
+    attrs.frame = Some(WindowFrameStyle::None);
+    attrs.level = Some(WindowLevel::AboveDock);
+    attrs.workspaces = Some(Workspaces::All);
+    attrs.resizable = Some(false);
+    attrs.movable = Some(false);
+    attrs.minimizable = Some(false);
+    attrs.maximizable = Some(false);
+    attrs.closable = Some(false);
+    attrs.close_on_escape = Some(false);
+    attrs.close_on_blur = Some(false);
+    attrs.close_on_press = Some(false);
+    attrs.taskbar = Some(false);
+    attrs.shadow = Some(false);
+    attrs.activate = Some(false);
+    attrs.focusable = Some(false);
+    attrs
+}
+
+fn build_overlay_card(
+    vm: Signal<OverlayViewModel>,
+    finish_if_ready: impl Fn() + Clone + 'static,
 ) -> impl IntoElement {
-    let vm = signal(OverlayViewModel::new(request));
-
-    let finish_if_ready = move || {
-        let terminal = vm.with(|m| m.outcome().copied());
-        if let Some(outcome) = terminal {
-            crate::store_outcome(&outcome_sink, outcome);
-            if quit_on_finish {
-                quit();
-            }
-        }
-    };
-
-    // Drive fade-in and countdown ticks on the NSH engine clock (supports Clock::manual in tests).
-    let finish_tick = finish_if_ready.clone();
-    let _timer = set_interval(Duration::from_millis(100), move || {
-        vm.update(|m| {
-            let _ = m.tick(Duration::from_millis(100));
-        });
-        finish_tick();
-    });
-
-    let finish_esc = finish_if_ready.clone();
-    on_key("escape", move |_| {
-        vm.update(|m| {
-            let _ = m.handle_key(OverlayKey::Escape);
-        });
-        finish_esc();
-    });
-
-    let finish_space = finish_if_ready.clone();
-    on_key("space", move |_| {
-        vm.update(|m| {
-            let _ = m.handle_key(OverlayKey::Space);
-        });
-        finish_space();
-    });
-
     let break_label: &'static str = vm.with(|m| match m.request().break_type {
         BreakType::Short => "SHORT BREAK",
         BreakType::Long => "LONG BREAK",
@@ -434,32 +459,184 @@ pub(crate) fn build_overlay_view(
         );
     }
 
-    card = card
-        .child(
-            text(move || {
-                vm.with(|m| {
-                    if m.is_shortcut_locked() {
-                        format!("Controls unlock in {}s", m.lock_remaining_secs())
-                    } else if m.request().strict_break && !m.request().allow_postpone {
-                        "Strict break active — rest your eyes".to_owned()
-                    } else {
-                        "Relax your gaze until the timer completes".to_owned()
-                    }
-                })
+    card.child(
+        text(move || {
+            vm.with(|m| {
+                if m.is_shortcut_locked() {
+                    format!("Controls unlock in {}s", m.lock_remaining_secs())
+                } else if m.request().strict_break && !m.request().allow_postpone {
+                    "Strict break active — rest your eyes".to_owned()
+                } else {
+                    "Relax your gaze until the timer completes".to_owned()
+                }
             })
-            .text_xs()
-            .text_color(colors::OVERLAY_MUTED),
-        )
-        .child(actions_row);
+        })
+        .text_xs()
+        .text_color(colors::OVERLAY_MUTED),
+    )
+    .child(actions_row)
+}
 
-    view()
+/// Builds the Cozy break overlay surface for both desktop runs and headless tests.
+pub(crate) fn build_overlay_view(
+    request: OverlayRequest,
+    outcome_sink: Arc<Mutex<Option<OverlayOutcome>>>,
+    quit_on_finish: bool,
+) -> impl IntoElement {
+    let vm = signal(OverlayViewModel::new(request));
+
+    let finish_if_ready = move || {
+        let terminal = vm.with(|m| m.outcome().copied());
+        if let Some(outcome) = terminal {
+            crate::store_outcome(&outcome_sink, outcome);
+            if quit_on_finish {
+                quit();
+            }
+        }
+    };
+
+    // Drive fade-in and countdown ticks on the NSH engine clock (supports Clock::manual in tests).
+    let finish_tick = finish_if_ready.clone();
+    let _timer = set_interval(Duration::from_millis(100), move || {
+        vm.update(|m| {
+            let _ = m.tick(Duration::from_millis(100));
+        });
+        finish_tick();
+    });
+
+    let finish_esc = finish_if_ready.clone();
+    on_key("escape", move |_| {
+        vm.update(|m| {
+            let _ = m.handle_key(OverlayKey::Escape);
+        });
+        finish_esc();
+    });
+
+    let finish_space = finish_if_ready.clone();
+    on_key("space", move |_| {
+        vm.update(|m| {
+            let _ = m.handle_key(OverlayKey::Space);
+        });
+        finish_space();
+    });
+
+    let mut root = view()
         .flex_1()
         .bg(colors::OVERLAY_CANVAS)
         .items_center()
         .justify_center()
         .p_6()
         .opacity(move || vm.with(OverlayViewModel::fade_in_alpha))
-        .child(card)
+        .child(build_overlay_card(vm, finish_if_ready.clone()));
+
+    if quit_on_finish {
+        let main_win = current_window();
+        let effect_win = main_win.clone();
+        effect(move || {
+            let disp_list = displays();
+            if let Some(primary) = disp_list
+                .iter()
+                .find(|d| d.primary)
+                .or_else(|| disp_list.first())
+            {
+                #[cfg(target_os = "macos")]
+                if primary.bounds.size.width.is_finite()
+                    && primary.bounds.size.width.0 > 0.0
+                    && primary.bounds.size.height.is_finite()
+                    && primary.bounds.size.height.0 > 0.0
+                {
+                    effect_win.set_bounds(nsh_core::desktop::WindowFrame {
+                        x: Some(primary.bounds.origin.x),
+                        y: Some(primary.bounds.origin.y),
+                        width: Some(primary.bounds.size.width),
+                        height: Some(primary.bounds.size.height),
+                        animated: Some(false),
+                    });
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let _ = primary;
+                    effect_win.set_mode(nsh_core::desktop::WindowMode::FullScreen);
+                }
+            }
+        });
+        main_win.focus();
+        let focus_win = main_win;
+        drop(set_timeout(Duration::from_millis(50), move || {
+            focus_win.focus();
+        }));
+
+        let secondary_displays = computed(|| {
+            let disp_list = displays();
+            if disp_list.len() <= 1 {
+                return Vec::new();
+            }
+            let primary_idx = disp_list.iter().position(|d| d.primary).unwrap_or(0);
+            disp_list
+                .into_iter()
+                .enumerate()
+                .filter_map(|(idx, d)| (idx != primary_idx).then_some(d))
+                .collect::<Vec<_>>()
+        });
+
+        root = root.child(each(
+            secondary_displays,
+            |d| d.id.0,
+            move |d, _| {
+                let (disp_id, disp_bounds) = d.with(|disp| (disp.id, disp.bounds));
+                let finish_if_ready = finish_if_ready.clone();
+                let sec_win_el = nsh_core::element::desktop::window()
+                    .id(format!("overlay-secondary-{}", disp_id.0))
+                    .kind(WindowKind::Popup)
+                    .attributes(secondary_window_attributes())
+                    .display(disp_id)
+                    .default_position(WindowPosition::At(disp_bounds.origin))
+                    .default_size(disp_bounds.size);
+                #[cfg(not(target_os = "macos"))]
+                let sec_win_el = sec_win_el.default_mode(nsh_core::desktop::WindowMode::FullScreen);
+                sec_win_el.content(move || {
+                    #[cfg(target_os = "macos")]
+                    {
+                        // AppKit constrains initial placement below the menu bar before
+                        // `NSStatusWindowLevel` applies, and drops requests sent before mount.
+                        let sec_win = current_window();
+                        let apply_bounds = move |b: Bounds<Points>| {
+                            if b.size.width.is_finite()
+                                && b.size.width.0 > 0.0
+                                && b.size.height.is_finite()
+                                && b.size.height.0 > 0.0
+                            {
+                                sec_win.set_bounds(nsh_core::desktop::WindowFrame {
+                                    x: Some(b.origin.x),
+                                    y: Some(b.origin.y),
+                                    width: Some(b.size.width),
+                                    height: Some(b.size.height),
+                                    animated: Some(false),
+                                });
+                            }
+                        };
+                        let apply_reactive = apply_bounds.clone();
+                        effect(move || {
+                            apply_reactive(d.with(|disp| disp.bounds));
+                        });
+                        drop(set_timeout(Duration::from_millis(16), move || {
+                            apply_bounds(d.with(|disp| disp.bounds));
+                        }));
+                    }
+                    view()
+                        .flex_1()
+                        .bg(colors::OVERLAY_CANVAS)
+                        .items_center()
+                        .justify_center()
+                        .p_6()
+                        .opacity(move || vm.with(OverlayViewModel::fade_in_alpha))
+                        .child(build_overlay_card(vm, finish_if_ready.clone()))
+                })
+            },
+        ));
+    }
+
+    root
 }
 
 #[component]
@@ -495,14 +672,28 @@ pub fn run_overlay(request: OverlayRequest) -> Result<OverlayOutcome, UiError> {
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
+        let main_window = overlay_main_window_options();
+        let initial_size = main_window.default_size.map_or((1920, 1080), |sz| {
+            (
+                (sz.width.0.round() as i32).max(1),
+                (sz.height.0.round() as i32).max(1),
+            )
+        });
+        let root = platform::Root::of::<BreakOverlayRoot>()
+            .appearance(Appearance::Dark)
+            .main_window(main_window);
         let _ = platform::run_app(
-            platform::AppSource::Rust(platform::Root::of::<BreakOverlayRoot>()),
+            platform::AppSource::Rust(root),
             platform::AppOptions {
                 title: "Safe Your Eyes — Break".to_owned(),
                 #[cfg(any(target_os = "linux", target_os = "windows"))]
                 app_id: "io.github.tunglt1810.safeyoureyes.overlay".to_owned(),
-                size: (960, 640),
+                size: initial_size,
                 appearance: Appearance::Dark,
+                #[cfg(target_os = "macos")]
+                activation_policy: platform::ActivationPolicy::Accessory,
+                #[cfg(target_os = "macos")]
+                keep_size: true,
                 ..Default::default()
             },
         );
@@ -733,5 +924,60 @@ mod tests {
         assert!(app.shows("Postpone (Space)"));
         app.press("Skip (Esc)")?;
         Ok(())
+    }
+
+    #[test]
+    fn overlay_window_options_configure_borderless_above_dock_all_workspaces() {
+        let opts = overlay_main_window_options();
+        assert_eq!(opts.attributes.frame, Some(WindowFrameStyle::None));
+        assert_eq!(opts.attributes.level, Some(WindowLevel::AboveDock));
+        assert_eq!(opts.attributes.workspaces, Some(Workspaces::All));
+        assert_eq!(opts.attributes.resizable, Some(false));
+        assert_eq!(opts.attributes.movable, Some(false));
+        assert_eq!(opts.attributes.minimizable, Some(false));
+        assert_eq!(opts.attributes.maximizable, Some(false));
+        assert_eq!(opts.attributes.closable, Some(false));
+        assert_eq!(opts.attributes.focusable, Some(true));
+        assert_eq!(opts.attributes.activate, Some(true));
+        assert_eq!(opts.attributes.close_on_press, Some(false));
+        assert_eq!(opts.attributes.taskbar, Some(false));
+        assert_eq!(opts.attributes.shadow, Some(false));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            opts.default_mode,
+            Some(nsh_core::desktop::WindowMode::FullScreen)
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(opts.default_mode, None);
+
+        let fallback = overlay_main_window_options_for_primary(None);
+        assert_eq!(fallback.default_size, Some(size(px(1920.0), px(1080.0))));
+        assert_eq!(fallback.default_position, None);
+
+        let custom = overlay_main_window_options_for_primary(Some(crate::MonitorRect {
+            x: 1920.0,
+            y: -180.0,
+            width: 2560.0,
+            height: 1440.0,
+            is_primary: true,
+        }));
+        assert_eq!(custom.default_size, Some(size(px(2560.0), px(1440.0))));
+        assert_eq!(
+            custom.default_position,
+            Some(WindowPosition::At(point(px(1920.0), px(-180.0))))
+        );
+
+        let sec = secondary_window_attributes();
+        assert_eq!(sec.frame, Some(WindowFrameStyle::None));
+        assert_eq!(sec.level, Some(WindowLevel::AboveDock));
+        assert_eq!(sec.workspaces, Some(Workspaces::All));
+        assert_eq!(sec.closable, Some(false));
+        assert_eq!(sec.close_on_escape, Some(false));
+        assert_eq!(sec.close_on_blur, Some(false));
+        assert_eq!(sec.close_on_press, Some(false));
+        assert_eq!(sec.taskbar, Some(false));
+        assert_eq!(sec.shadow, Some(false));
+        assert_eq!(sec.activate, Some(false));
+        assert_eq!(sec.focusable, Some(false));
     }
 }

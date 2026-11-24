@@ -20,9 +20,15 @@ The Cargo workspace contains four crates and compiles into one binary named `saf
 
 1. The daemon runs on `std::thread` and `std::sync::mpsc` without `tokio`.
 2. In the `Waiting` state, the daemon creates no graphics context and uses 0% GPU.
-3. On macOS and Windows, `PlatformEventLoop` pumps main-thread operating system events for the system tray and macOS application reopen callbacks without a window or GPU context.
-4. When the daemon needs to show a break overlay or the Settings window, the daemon starts a child process of `safe-your-eyes` with `--internal-overlay` or `--internal-settings`.
-5. When the child process exits, the operating system releases all graphics memory.
+3. On macOS and Windows, `PlatformEventLoop` pumps main-thread operating system events without a window or GPU context.
+4. On macOS, `PlatformEventLoop` forwards application reopen requests as `TrayEvent::Reopen`.
+5. On macOS, `PlatformEventLoop` detects Login Item launches (`keyAELaunchedAsLogInItem`).
+6. On macOS, `PlatformEventLoop` yields foreground activation rights to the break overlay and Settings child processes.
+7. The daemon updates `TrayHandle` on each loop iteration when the tray snapshot changes.
+8. On macOS, `TrayHandle` runs a timer in `NSEventTrackingRunLoopMode` to update the countdown while the menu stays open.
+9. When the daemon needs to show a break overlay or the Settings window, the daemon resolves the executable symlink and starts a child process of `safe-your-eyes` with `--internal-overlay` or `--internal-settings`.
+10. The daemon ignores `OpenSettings` and `TrayEvent::Reopen` during `PreBreak`, `Break`, or when the tray menu is locked.
+11. When the child process exits, the operating system releases all graphics memory.
 
 ### 2.2 Safety and Build Rules
 
@@ -132,9 +138,12 @@ Every event handler runs synchronously and returns a list of `SchedulerAction` v
 2. When user activity resumes during `Resting`, the policy calculates total idle duration.
 3. When idle duration is less than `short_break_interval_secs`, the policy returns `ResumeCreditBack` to shift the next break forward.
 4. When idle duration is greater than or equal to `short_break_interval_secs`, the policy returns `ResumeResetCycle`.
-5. When `postpone_if_active` is `true` and the user acts during the final 2 seconds before `Break`, the policy defers the break by 2 seconds.
+5. When `postpone_if_active` is `true` and the user acts during the final 2 seconds before `Break`, `Scheduler` stays in `PreBreak`, dismisses any active pre-break banner once, and defers `Break` by 2 seconds without repeating the pre-break notification or chime.
 
 ### 7.2 `DoNotDisturb`
+
+`Scheduler` evaluates `DoNotDisturbPolicy` before entering `PreBreak` and again before entering `Break`.
+When `DoNotDisturbPolicy` blocks a break, `Scheduler` skips the current break, dismisses any active pre-break notification, advances `BreakQueue`, and starts the next wait cycle.
 
 `DoNotDisturbPolicy` evaluates rules in fixed priority order:
 
@@ -148,10 +157,11 @@ Every event handler runs synchronously and returns a list of `SchedulerAction` v
 
 ### 7.3 `LimitConsecutiveSkipping`
 
-1. Each accepted `Skip` or `Postpone` increments `consecutive_skips` by 1.
-2. When `enabled` is `true` and `consecutive_skips >= max_skips` (default 2), `Scheduler` disables both `Skip` and `Postpone` on the next break.
-3. Completing a break resets `consecutive_skips` to 0.
-4. When `enabled` is `true` and `consecutive_skips > 0`, the overlay shows a status note with the skip count.
+1. `limit_consecutive_skips.enabled` defaults to `false` and `max_skips` defaults to `2`.
+2. Each accepted `Skip` or `Postpone` increments `consecutive_skips` by 1.
+3. When `enabled` is `true` and `consecutive_skips >= max_skips`, `Scheduler` disables both `Skip` and `Postpone` on the next break.
+4. Completing a break resets `consecutive_skips` to 0.
+5. When `enabled` is `true` and `consecutive_skips > 0`, the overlay shows a status note with the skip count.
 
 ## 8. Configuration and Session Persistence
 
@@ -161,7 +171,8 @@ The application stores configuration in `config.toml` with `schema_version = 1`.
 - `schema_version` equals 1.
 - Break intervals, break durations, `postpone_duration_secs`, and `smart_pause.idle_threshold_secs` are at least 1.
 - `pre_break_warning_secs` is less than `short_break_interval_secs`.
-- `audible_alert.volume` is between 0 and 100.
+- `fade_in_ms` allows `0` to disable the overlay fade-in animation.
+- `audible_alert.volume` is between 0 and 100 (`audible_alert.pre_break` defaults to `false` and `audible_alert.post_break` defaults to `true`).
 - `limit_consecutive_skips.max_skips` is at least 1 when enabled.
 - Every `BreakSpec` has a non-empty name and positive overrides.
 
@@ -169,17 +180,28 @@ When `config.toml` is missing or invalid, `Config::load_or_default` returns `Con
 `Config` stores `theme` (`system`, `light`, or `dark`) with default `system`.
 When `config.toml` omits `theme`, `Config` defaults `theme` to `system` without increasing `schema_version`.
 When `persist_state` is `true`, the daemon writes `SessionState` to `session.toml` using `BreakQueue::persisted_short_index()` and `BreakQueue::persisted_long_index()` so restarts resume at the staged break.
-When `autostart` is `true`, saving Settings or starting the non-headless daemon writes a per-user OS login entry (`~/.config/autostart/safe-your-eyes.desktop` on Linux, `~/Library/LaunchAgents/io.github.safeyoureyes.SafeYourEyes.plist` on macOS, or `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\safe-your-eyes.cmd` on Windows) that passes `--background`.
-When `autostart` is `false`, the application removes that entry.
+When `autostart` is `true`, `sye-platform` registers a per-user operating system login item:
 
-## 9. Audio Chime and Local IPC
+- On macOS `.app` bundles with the default configuration path, `sye-platform` registers `SMAppService.mainApp` (`ServiceManagement.framework`). In this mode, `sye-platform` also deletes any legacy `~/Library/LaunchAgents/io.github.safeyoureyes.SafeYourEyes.plist` file.
+- On macOS with a custom `--config` path, `sye-platform` writes `~/Library/LaunchAgents/io.github.safeyoureyes.SafeYourEyes.plist` with `--background` and `AssociatedBundleIdentifiers`.
+- On Linux, `sye-platform` writes `~/.config/autostart/safe-your-eyes.desktop` with `--background`.
+- On Windows, `sye-platform` writes `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\safe-your-eyes.cmd` with `--background`.
 
-### 9.1 WAV Chime Synthesizer
+When `autostart` is `false`, `sye-platform` unregisters or deletes that login item.
+On macOS `.app` bundles with the default configuration path, `query_system_autostart` reads the `System Settings` login item state.
+When the user changes `Launch at login (startup)`, the Settings window updates the login item immediately.
+When the user cancels or closes the Settings window without `Save`, or when the daemon stops while the Settings window is open, the application restores the saved login item state.
+
+## 9. Audio Chime, Notifications, and Local IPC
+
+### 9.1 WAV Chime Synthesizer and Pre-Break Notifications
 
 `sye-core` synthesizes 16-bit mono PCM RIFF/WAVE bytes at 22050 Hz for `PreBreak` and `PostBreak`.
 Each chime uses a smooth attack and exponential decay envelope to prevent clicks.
 Volume clamps to 0 through 100, and volume 0 produces a valid silent WAV buffer.
 `sye-platform` plays the buffer without blocking via `pw-play`, `paplay`, or `aplay` on Linux, `afplay` on macOS, and `PlaySoundW` on Windows.
+On macOS `.app` bundles, `OsNotifier` requests alert permission once on daemon startup and sends pre-break banners through `UserNotifications.framework` (`UNUserNotificationCenter`).
+On Linux and Windows, `OsNotifier` sends pre-break banners through `notify-rust`.
 
 ### 9.2 Local IPC Protocol
 
@@ -233,8 +255,19 @@ Status banners and destructive buttons pair `warning-muted` / `error-muted` fill
 - The reveal runs only when the resolved Light or Dark appearance changes and `reduce_motion()` is `false`.
 - Pressable pills scale to `0.97` on press.
 - All animations stop when the operating system enables Reduce Motion (`reduce_motion()`).
-- **Break Overlay**: Uses restful dark-roast tones (`#18140E` canvas, `#231D16` card), displays the embedded app icon, fades in over `fade_in_ms` with a `0.98 -> 1.0` scale-in, and shows the exercise title, `MM:SS` countdown, animated progress bar, shortcut lock notice, `Postpone (Space)`, and `Skip (Esc)`.
-- **Settings Window**: Uses `TitleBarStyle::Hidden` (`36pt` height, macOS traffic lights integrated inside the top-left of the Floating Sage Sidebar, and reactive top-right clearance on Windows and Linux) so the titlebar shares the active Cozy theme.
+- The break overlay opens a borderless `WindowFrameStyle::None` window at `WindowLevel::AboveDock` across `Workspaces::All`.
+- On macOS, the break overlay uses `ActivationPolicy::Accessory`.
+- On macOS, the break overlay covers the full bounds of the primary display.
+- On Linux and Windows, the break overlay uses `WindowMode::FullScreen` on the primary display.
+- On additional displays, the break overlay opens secondary `WindowKind::Popup` windows that display the same Cozy break card and `Postpone (Space)` / `Skip (Esc)` controls.
+- The break overlay focuses the primary window on launch.
+- The break overlay uses dark-roast colors (`#18140E` canvas and `#231D16` card).
+- The break overlay fades in over `fade_in_ms` with a `0.98 -> 1.0` scale-in.
+- The break overlay shows the embedded app icon, exercise title, `MM:SS` countdown, animated progress bar, shortcut lock notice, `Postpone (Space)`, and `Skip (Esc)`.
+- The Settings window uses `TitleBarStyle::Hidden` (`36pt` height) so the titlebar matches the active Cozy theme.
+- On macOS, the Floating Sage Sidebar places the window traffic lights inside its top-left area.
+- On Windows and Linux, the Settings window reserves reactive top-right clearance for native window controls.
+- The Settings window focuses itself on launch to appear in front of the active application.
 - The Settings window opens directly in the saved `Config.theme` mode with zero flash.
 - The Floating Sage Sidebar has a matching `1px` border and switches between `Timing`, `Policies`, `Exercises`, and `About & Support`.
 - The fixed page header shows the active screen title (`Timing`, `Policies`, `Exercises`, or `About & Support`) with the animated highlighter bar on the left, the top-right Cozy theme toggle pill (`Theme: System`, `Theme: Light`, `Theme: Dark` with vector SVG icon) on the right, and four Pastel KPI summary cards below.
@@ -254,7 +287,7 @@ Global options:
 
 Modes and control flags:
 
-- No control flag: Start the single-instance daemon. When the user omits `--headless` and `--background`, the daemon opens the Settings window after startup and keeps the system tray active. When the Settings window closes after saving changes, the daemon reloads `config.toml` immediately. If a daemon already listens on `--socket`, the CLI sends `IpcCommand::OpenSettings` (unless `--headless` or `--background` is present), prints `Safe Your Eyes is already running` to stdout, and exits with code 0.
+- No control flag: Start the single-instance daemon. When the user omits `--headless` and `--background` and macOS did not launch the process as a Login Item (`keyAELaunchedAsLogInItem`), the daemon opens the Settings window after startup and keeps the system tray active. When the Settings window closes after saving changes, the daemon reloads `config.toml` immediately. If a daemon already listens on `--socket`, the CLI sends `IpcCommand::OpenSettings` (unless `--headless` or `--background` is present), prints `Safe Your Eyes is already running` to stdout, and exits with code 0.
 - `--status`: Print human-readable daemon status to stdout and exit with code 0. If no daemon is running, print `Safe Your Eyes is not running` to stderr and exit with code 1.
 - `--status --json`: Print JSON with `state`, `enabled`, `next_break_type`, `next_break_name`, `seconds_until_next_break`, and `consecutive_skips`.
 - `-e`, `--enable`: Resume the running daemon.
