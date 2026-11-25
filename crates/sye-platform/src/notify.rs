@@ -1,7 +1,9 @@
 //! Cross-platform desktop pre-break notification adapter (`sye_core::Notifier`).
 
+#[cfg(not(target_os = "macos"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(all(unix, not(target_os = "macos")))]
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 #[cfg(not(target_os = "macos"))]
 use notify_rust::{Notification, Timeout};
@@ -16,7 +18,34 @@ const APP_ICON: &str = "safe-your-eyes";
 pub struct OsNotifier {
     enabled: bool,
     #[cfg(all(unix, not(target_os = "macos")))]
-    active: Mutex<Option<notify_rust::NotificationHandle>>,
+    active: Mutex<Option<LinuxActive>>,
+    #[cfg(not(unix))]
+    active: AtomicBool,
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+struct LinuxActive {
+    handle: notify_rust::NotificationHandle,
+    listened_id: u32,
+    user_closed: Arc<AtomicBool>,
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn spawn_close_listener(id: u32, user_closed: &Arc<AtomicBool>) {
+    let user_closed = Arc::clone(user_closed);
+    // `handle_action` blocks until the server reports `ActionInvoked` or `NotificationClosed`.
+    let _ = std::thread::Builder::new()
+        .name("sye-notify-close".to_owned())
+        .spawn(move || {
+            let _ = notify_rust::handle_action(id, |response: &notify_rust::ActionResponse| {
+                if matches!(
+                    response,
+                    notify_rust::ActionResponse::Closed(notify_rust::CloseReason::Dismissed)
+                ) {
+                    user_closed.store(true, Ordering::Release);
+                }
+            });
+        });
 }
 
 impl std::fmt::Debug for OsNotifier {
@@ -35,6 +64,8 @@ impl OsNotifier {
             enabled: true,
             #[cfg(all(unix, not(target_os = "macos")))]
             active: Mutex::new(None),
+            #[cfg(not(unix))]
+            active: AtomicBool::new(false),
         }
     }
 
@@ -45,6 +76,8 @@ impl OsNotifier {
             enabled: false,
             #[cfg(all(unix, not(target_os = "macos")))]
             active: Mutex::new(None),
+            #[cfg(not(unix))]
+            active: AtomicBool::new(false),
         }
     }
 
@@ -97,8 +130,6 @@ impl Notifier for OsNotifier {
             return Ok(());
         }
 
-        let _ = self.dismiss();
-
         let (summary, body) = format_pre_break_notification(break_type, title, warning_secs);
 
         #[cfg(target_os = "macos")]
@@ -110,30 +141,74 @@ impl Notifier for OsNotifier {
         {
             let timeout_ms = u32::try_from(warning_secs.saturating_mul(1000)).unwrap_or(u32::MAX);
 
-            let mut notification = Notification::new();
-            notification
-                .appname(APP_NAME)
-                .icon(APP_ICON)
-                .summary(&summary)
-                .body(&body)
-                .timeout(Timeout::Milliseconds(timeout_ms));
-
             #[cfg(all(unix, not(target_os = "macos")))]
             {
+                {
+                    let mut guard = self.active.lock().unwrap_or_else(PoisonError::into_inner);
+                    if let Some(active) = guard.as_mut() {
+                        if active.user_closed.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        active
+                            .handle
+                            .summary(&summary)
+                            .body(&body)
+                            .timeout(Timeout::Milliseconds(timeout_ms));
+                        if active.handle.update().is_ok() {
+                            // The server can assign a new id when the replaced notification expired.
+                            let id = active.handle.id();
+                            if id != active.listened_id {
+                                active.listened_id = id;
+                                spawn_close_listener(id, &active.user_closed);
+                            }
+                            return Ok(());
+                        }
+                        *guard = None;
+                    }
+                }
+
+                let mut notification = Notification::new();
+                notification
+                    .appname(APP_NAME)
+                    .icon(APP_ICON)
+                    .summary(&summary)
+                    .body(&body)
+                    .timeout(Timeout::Milliseconds(timeout_ms));
                 let handle = notification
                     .show()
                     .map_err(|err| PlatformError::Unavailable(err.to_string()))?;
+                let user_closed = Arc::new(AtomicBool::new(false));
+                let listened_id = handle.id();
+                spawn_close_listener(listened_id, &user_closed);
                 let mut guard = self.active.lock().unwrap_or_else(PoisonError::into_inner);
-                *guard = Some(handle);
+                *guard = Some(LinuxActive {
+                    handle,
+                    listened_id,
+                    user_closed,
+                });
                 drop(guard);
                 Ok(())
             }
 
             #[cfg(not(unix))]
             {
+                // `notify-rust` on Windows cannot update an existing toast in place, so avoid
+                // stacking a separate toast on each countdown tick.
+                if self.active.swap(true, Ordering::AcqRel) {
+                    return Ok(());
+                }
+
+                let mut notification = Notification::new();
                 notification
-                    .show()
-                    .map_err(|err| PlatformError::Unavailable(err.to_string()))?;
+                    .appname(APP_NAME)
+                    .icon(APP_ICON)
+                    .summary(&summary)
+                    .body(&body)
+                    .timeout(Timeout::Milliseconds(timeout_ms));
+                if let Err(err) = notification.show() {
+                    self.active.store(false, Ordering::Release);
+                    return Err(PlatformError::Unavailable(err.to_string()));
+                }
                 Ok(())
             }
         }
@@ -154,9 +229,12 @@ impl Notifier for OsNotifier {
                 guard.take()
             };
             if let Some(active) = handle {
-                active.close();
+                active.handle.close();
             }
         }
+
+        #[cfg(not(unix))]
+        self.active.store(false, Ordering::Release);
 
         Ok(())
     }
@@ -170,18 +248,31 @@ impl Notifier for OsNotifier {
 mod macos_impl {
     use std::cell::RefCell;
     use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use block2::{DynBlock, RcBlock};
     use objc2::rc::{Retained, autoreleasepool};
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2::{AnyThread, MainThreadMarker, define_class, msg_send};
-    use objc2_foundation::{NSArray, NSBundle, NSError, NSObject, NSObjectProtocol, NSString};
+    use objc2_foundation::{
+        NSArray, NSBundle, NSError, NSObject, NSObjectProtocol, NSSet, NSString,
+    };
     use sye_core::PlatformError;
 
     const PRE_BREAK_NOTIFICATION_ID: &str = "io.github.safeyoureyes.pre-break";
-    // Alert/banner/list only: badges are unused and chimes play through `OsAudioPlayer`.
+    // Alert/banner only: badges are unused and chimes play through `OsAudioPlayer`.
     const AUTHORIZATION_OPTIONS: usize = 1 << 2;
-    const PRESENTATION: usize = (1 << 3) | (1 << 4);
+    // Banner only so transient pre-break countdown alerts stay out of Notification Center history.
+    const PRESENTATION: usize = 1 << 4;
+
+    // Tracks whether a pre-break alert is still active so late async XPC deliveries clear themselves.
+    static NOTIFICATION_ACTIVE: AtomicBool = AtomicBool::new(false);
+    // Set when the user closes or clicks the banner so later countdown ticks do not re-post it.
+    static USER_DISMISSED: AtomicBool = AtomicBool::new(false);
+
+    // `UNNotificationCategoryOptionCustomDismissAction`: macOS reports a banner close to the
+    // delegate only for categories with this option.
+    const CATEGORY_CUSTOM_DISMISS_ACTION: usize = 1 << 0;
 
     thread_local! {
         // `UNUserNotificationCenter.delegate` is weak, so retain the delegate on the main thread.
@@ -204,7 +295,25 @@ mod macos_impl {
                 _notification: &AnyObject,
                 done: &DynBlock<dyn Fn(usize)>,
             ) {
-                done.call((PRESENTATION,));
+                let options = if NOTIFICATION_ACTIVE.load(Ordering::Acquire) {
+                    PRESENTATION
+                } else {
+                    0
+                };
+                done.call((options,));
+            }
+
+            #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+            fn did_receive_response(
+                &self,
+                _center: &AnyObject,
+                _response: &AnyObject,
+                done: &DynBlock<dyn Fn()>,
+            ) {
+                if NOTIFICATION_ACTIVE.load(Ordering::Acquire) {
+                    USER_DISMISSED.store(true, Ordering::Release);
+                }
+                done.call(());
             }
         }
     );
@@ -220,6 +329,9 @@ mod macos_impl {
     }
 
     pub(super) fn show_pre_break(summary: &str, body: &str) -> Result<(), PlatformError> {
+        if USER_DISMISSED.load(Ordering::Acquire) {
+            return Ok(());
+        }
         autoreleasepool(|_| {
             let center = notification_center()?;
             install_delegate(&center);
@@ -232,11 +344,17 @@ mod macos_impl {
                 PlatformError::Unavailable("UNNotificationRequest unavailable".to_owned())
             })?;
 
+            NOTIFICATION_ACTIVE.store(true, Ordering::Release);
+
             let title_ns = NSString::from_str(summary);
             let body_ns = NSString::from_str(body);
             let id_ns = NSString::from_str(PRE_BREAK_NOTIFICATION_ID);
             let trigger: Option<&AnyObject> = None;
-            let req_done = RcBlock::new(|_err: *mut NSError| {});
+            let req_done = RcBlock::new(|_err: *mut NSError| {
+                if !NOTIFICATION_ACTIVE.load(Ordering::Acquire) {
+                    clear_notifications();
+                }
+            });
 
             // SAFETY: Documented `UserNotifications.framework` initializers, string setters, and
             // `addNotificationRequest:withCompletionHandler:` with a nil trigger for immediate delivery.
@@ -244,6 +362,7 @@ mod macos_impl {
                 let content: Retained<AnyObject> = msg_send![content_cls, new];
                 let _: () = msg_send![&*content, setTitle: &*title_ns];
                 let _: () = msg_send![&*content, setBody: &*body_ns];
+                let _: () = msg_send![&*content, setCategoryIdentifier: &*id_ns];
                 let request: Retained<AnyObject> = msg_send![
                     request_cls,
                     requestWithIdentifier: &*id_ns,
@@ -261,13 +380,19 @@ mod macos_impl {
     }
 
     pub(super) fn dismiss() {
+        NOTIFICATION_ACTIVE.store(false, Ordering::Release);
+        USER_DISMISSED.store(false, Ordering::Release);
+        clear_notifications();
+    }
+
+    fn clear_notifications() {
         autoreleasepool(|_| {
             let Ok(center) = notification_center() else {
                 return;
             };
             let ids =
                 NSArray::from_retained_slice(&[NSString::from_str(PRE_BREAK_NOTIFICATION_ID)]);
-            // SAFETY: Documented `UNUserNotificationCenter` selectors accepting `NSArray<NSString *> *`.
+            // SAFETY: Documented `UNUserNotificationCenter` selectors removing pending and delivered alerts.
             unsafe {
                 let _: () =
                     msg_send![&*center, removePendingNotificationRequestsWithIdentifiers: &*ids];
@@ -279,6 +404,7 @@ mod macos_impl {
     fn ensure_authorization(center: &AnyObject) {
         static AUTH_REQUESTED: OnceLock<()> = OnceLock::new();
         AUTH_REQUESTED.get_or_init(|| {
+            register_category(center);
             let auth_done = RcBlock::new(|_granted: Bool, _err: *mut NSError| {});
             // SAFETY: `requestAuthorizationWithOptions:completionHandler:` is a documented
             // `UNUserNotificationCenter` selector accepting `UNAuthorizationOptions` and `(BOOL, NSError *)`.
@@ -290,6 +416,30 @@ mod macos_impl {
                 ];
             }
         });
+    }
+
+    fn register_category(center: &AnyObject) {
+        let Some(category_cls) = AnyClass::get(c"UNNotificationCategory") else {
+            return;
+        };
+        let id_ns = NSString::from_str(PRE_BREAK_NOTIFICATION_ID);
+        let empty = NSArray::<AnyObject>::new();
+        // SAFETY: Documented `UNNotificationCategory` factory and `UNUserNotificationCenter`
+        // `setNotificationCategories:` selector accepting `NSSet<UNNotificationCategory *> *`.
+        unsafe {
+            let category: Option<Retained<AnyObject>> = msg_send![
+                category_cls,
+                categoryWithIdentifier: &*id_ns,
+                actions: &*empty,
+                intentIdentifiers: &*empty,
+                options: CATEGORY_CUSTOM_DISMISS_ACTION
+            ];
+            let Some(category) = category else {
+                return;
+            };
+            let categories = NSSet::from_retained_slice(&[category]);
+            let _: () = msg_send![center, setNotificationCategories: &*categories];
+        }
     }
 
     fn install_delegate(center: &AnyObject) {
