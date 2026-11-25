@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::chime::ChimeKind;
-use crate::config::{BreakType, Config};
+use crate::config::{BreakType, Config, SkipLimitConfig};
 use crate::policies::{
     DndContext, DoNotDisturbPolicy, SkipLimitPolicy, SmartPauseDecision, SmartPausePolicy,
 };
@@ -629,9 +629,8 @@ impl<C: Clock> Scheduler<C> {
             return Vec::new();
         }
 
-        let limit_hit = self
-            .skip_limit
-            .controls_disabled(&self.config.limit_consecutive_skips);
+        let skip_limit_cfg = self.effective_skip_limit();
+        let limit_hit = self.skip_limit.controls_disabled(&skip_limit_cfg);
 
         match outcome {
             OverlayOutcome::Completed => self.complete_break(true),
@@ -690,6 +689,13 @@ impl<C: Clock> Scheduler<C> {
     }
 
     fn handle_reload_config(&mut self, new_cfg: Config) -> Vec<SchedulerAction> {
+        let mut current_with_new_theme = self.config.clone();
+        current_with_new_theme.theme = new_cfg.theme;
+        if new_cfg == current_with_new_theme {
+            self.config.theme = new_cfg.theme;
+            return Vec::new();
+        }
+
         let mut actions = Vec::new();
         self.push_active_state_cleanup(&mut actions);
 
@@ -741,15 +747,21 @@ impl<C: Clock> Scheduler<C> {
         }
     }
 
+    const fn effective_skip_limit(&self) -> SkipLimitConfig {
+        SkipLimitConfig {
+            enabled: !self.config.strict_break && self.config.limit_consecutive_skips.enabled,
+            max_skips: self.config.limit_consecutive_skips.max_skips,
+        }
+    }
+
     fn enter_break(&mut self, now_ms: u64, spec: ResolvedBreak) -> Vec<SchedulerAction> {
         self.state = SchedulerState::Break;
         self.pre_break_notification_active = false;
         self.break_started_ms = now_ms;
         self.break_ends_ms = now_ms.saturating_add(spec.duration_secs.saturating_mul(1000));
 
-        let limit_hit = self
-            .skip_limit
-            .controls_disabled(&self.config.limit_consecutive_skips);
+        let skip_limit_cfg = self.effective_skip_limit();
+        let limit_hit = self.skip_limit.controls_disabled(&skip_limit_cfg);
         let request = OverlayRequest {
             break_type: spec.break_type,
             title: spec.name,
@@ -759,9 +771,7 @@ impl<C: Clock> Scheduler<C> {
             postpone_duration_secs: self.config.postpone_duration_secs,
             shortcut_disable_secs: self.config.shortcut_disable_secs,
             fade_in_ms: self.config.fade_in_ms,
-            status_note: self
-                .skip_limit
-                .status_label(&self.config.limit_consecutive_skips),
+            status_note: self.skip_limit.status_label(&skip_limit_cfg),
         };
         vec![
             SchedulerAction::ShowOverlay(request),
@@ -1631,5 +1641,58 @@ mod tests {
                 .iter()
                 .any(|a| matches!(a, SchedulerAction::DismissNotification))
         );
+    }
+
+    #[test]
+    fn reload_config_theme_only_preserves_countdown() {
+        let clock = FakeClock::default();
+        let cfg = test_config();
+        let mut sched = Scheduler::new(cfg.clone(), &clock, 1);
+        let _ = sched.handle_event(SchedulerEvent::Start);
+        clock.advance_secs(120);
+        assert_eq!(sched.status_snapshot().seconds_until_next_break, 780);
+
+        let mut theme_only = cfg;
+        theme_only.theme = crate::config::ThemeMode::Dark;
+        let actions = sched.handle_event(SchedulerEvent::ReloadConfig(theme_only));
+        assert!(actions.is_empty());
+        assert_eq!(sched.config().theme, crate::config::ThemeMode::Dark);
+        assert_eq!(sched.status_snapshot().seconds_until_next_break, 780);
+    }
+
+    #[test]
+    fn strict_break_overrides_skip_limit_for_postpone_and_status_note() {
+        let clock = FakeClock::default();
+        let cfg = Config {
+            strict_break: true,
+            allow_postpone: true,
+            postpone_duration_secs: 60,
+            limit_consecutive_skips: SkipLimitConfig {
+                enabled: true,
+                max_skips: 1,
+            },
+            ..test_config()
+        };
+        let mut sched = Scheduler::new(cfg, &clock, 1);
+        let _ = sched.handle_event(SchedulerEvent::Start);
+
+        let first = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
+        assert!(first.iter().any(|a| matches!(
+            a,
+            SchedulerAction::ShowOverlay(req)
+                if req.strict_break && req.allow_postpone && req.status_note.is_none()
+        )));
+        clock.advance_secs(3);
+        let _ = sched.handle_event(SchedulerEvent::OverlayFinished(OverlayOutcome::Postponed {
+            duration_secs: 60,
+        }));
+        assert_eq!(sched.state(), SchedulerState::Waiting);
+
+        let second = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
+        assert!(second.iter().any(|a| matches!(
+            a,
+            SchedulerAction::ShowOverlay(req)
+                if req.strict_break && req.allow_postpone && req.status_note.is_none()
+        )));
     }
 }

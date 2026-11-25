@@ -2,11 +2,13 @@
 //!
 //! Applies the Cozy Design System (<https://github.com/tunglt1810/cozy>) with Astryx layout rules:
 //! seamless themed hidden titlebar, Floating Sage Sidebar with spring indicator, top-right Cozy
-//! theme switcher with Circular Theme Reveal, Pastel KPI summary cards, unified rounded Form Card
-//! with clipped sticky toolbar, and author support link.
+//! theme switcher with smooth color transitions, staggered list-item entrances on tab switch,
+//! Pastel KPI summary cards, unified rounded Form Card with clipped sticky toolbar, and author
+//! support link.
 
 use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,18 +16,18 @@ use std::time::Duration;
 use nsh_core::desktop::{MainWindowOptions, TitleBarOptions, TitleBarStyle};
 use nsh_core::element::desktop::{current_window, on_app_quit, quit, title_bar};
 use nsh_core::prelude::*;
-use nsh_core::shader::TransitionKey;
 use sye_core::config::{BreakSpec, BreakType, Config, ThemeMode};
 
 use crate::UiError;
 use crate::theme::{
     SUPPORT_URL, appearance_for_theme_mode, colors, motion, next_theme_mode, radii,
-    theme_mode_for_appearance, theme_reveal_shader,
+    theme_mode_for_appearance,
 };
 use crate::ui::{
-    KpiTone, app_icon, cozy_input, cozy_switch, destructive_button, ghost_button, page_heading,
-    pastel_kpi_card, primary_button, secondary_button, section_divider, section_header,
-    sidebar_nav_indicator, sidebar_nav_item, status_banner, support_link, support_qr_card,
+    KpiTone, app_icon, cozy_input, cozy_input_with_disabled, cozy_switch,
+    cozy_switch_with_disabled, destructive_button, ghost_button, page_heading, pastel_kpi_card,
+    primary_button, secondary_button, section_divider, section_header, sidebar_nav_indicator,
+    sidebar_nav_item, stagger_item, status_banner, support_link, support_qr_card,
     theme_toggle_button,
 };
 
@@ -78,6 +80,7 @@ pub struct SettingsViewModel {
     pub draft_long_exercise: String,
     pub draft_skip_window: String,
     pub draft_take_window: String,
+    system_autostart: Option<bool>,
 }
 
 impl SettingsViewModel {
@@ -85,7 +88,10 @@ impl SettingsViewModel {
     /// if the existing file is unreadable or invalid.
     #[must_use]
     pub fn load(config_path: PathBuf) -> Self {
-        let (config, load_err) = Config::load_or_default(&config_path);
+        let (mut config, load_err) = Config::load_or_default(&config_path);
+        if config.strict_break {
+            config.limit_consecutive_skips.enabled = false;
+        }
         Self {
             config_path,
             config,
@@ -97,6 +103,7 @@ impl SettingsViewModel {
             draft_long_exercise: String::new(),
             draft_skip_window: String::new(),
             draft_take_window: String::new(),
+            system_autostart: None,
         }
     }
 
@@ -171,6 +178,43 @@ impl SettingsViewModel {
         self.remove_window_pattern(WindowList::Take, index)
     }
 
+    /// Enables or disables `strict_break`, automatically disabling `limit_consecutive_skips`
+    /// whenever strict mode hides the Skip control.
+    pub const fn set_strict_break(&mut self, enabled: bool) {
+        self.config.strict_break = enabled;
+        if enabled {
+            self.config.limit_consecutive_skips.enabled = false;
+        }
+    }
+
+    /// Enables or disables `limit_consecutive_skips` when `strict_break` is inactive.
+    pub const fn set_limit_consecutive_skips(&mut self, enabled: bool) {
+        if !self.config.strict_break {
+            self.config.limit_consecutive_skips.enabled = enabled;
+        }
+    }
+
+    /// Persists only `config.theme` to `config_path` so closing Settings preserves the active
+    /// theme without writing unsaved form edits. Skips writing if an existing file is invalid.
+    pub fn persist_theme(&self) -> Result<(), String> {
+        let (mut on_disk, load_err) = Config::load_or_default(&self.config_path);
+        if load_err.is_some() {
+            return Ok(());
+        }
+        if on_disk.theme == self.config.theme {
+            return Ok(());
+        }
+        // Keep `autostart` aligned with the OS login-item state seen by the daemon so a
+        // theme-only close neither clobbers OS autostart nor triggers a non-theme reload.
+        if let Some(actual) = self.system_autostart {
+            on_disk.autostart = actual;
+        }
+        on_disk.theme = self.config.theme;
+        on_disk
+            .save_to_path(&self.config_path)
+            .map_err(|err| err.to_string())
+    }
+
     /// Validates the current in-memory configuration and updates `validation_error`.
     pub fn validate(&mut self) -> Result<(), String> {
         if let Err(err) = self.config.validate() {
@@ -196,16 +240,20 @@ impl SettingsViewModel {
 
     /// Validates and persists the configuration to `config_path`.
     pub fn save(&mut self) -> Result<SettingsOutcome, String> {
+        if self.config.strict_break {
+            self.config.limit_consecutive_skips.enabled = false;
+        }
         self.validate()?;
         if let Err(err) = self.config.save_to_path(&self.config_path) {
             return self.fail_validation(err.to_string());
         }
+        self.system_autostart = Some(self.config.autostart);
         self.validation_error = None;
         self.outcome = Some(SettingsOutcome::Saved);
         Ok(SettingsOutcome::Saved)
     }
 
-    /// Cancels editing without writing to disk.
+    /// Cancels editing without writing unsaved form edits to disk.
     pub fn cancel(&mut self) -> SettingsOutcome {
         self.outcome = Some(SettingsOutcome::Cancelled);
         SettingsOutcome::Cancelled
@@ -320,6 +368,7 @@ static SETTINGS_LAUNCH: Mutex<Option<SettingsLaunch>> = Mutex::new(None);
 
 fn load_settings_vm(config_path: PathBuf, system_autostart: Option<bool>) -> SettingsViewModel {
     let mut vm = SettingsViewModel::load(config_path);
+    vm.system_autostart = system_autostart;
     if let Some(actual) = system_autostart {
         vm.config.autostart = actual;
     }
@@ -332,6 +381,16 @@ fn number_field_row(
     read: impl Fn() -> u64 + 'static,
     write: impl Fn(u64) + 'static,
 ) -> impl IntoElement {
+    number_field_row_with_disabled(label, unit, read, || false, write)
+}
+
+fn number_field_row_with_disabled(
+    label: &'static str,
+    unit: &'static str,
+    read: impl Fn() -> u64 + 'static,
+    disabled: impl Fn() -> bool + Copy + 'static,
+    write: impl Fn(u64) + 'static,
+) -> impl IntoElement {
     view()
         .flex_row()
         .h(px(36.0))
@@ -342,16 +401,18 @@ fn number_field_row(
             text(label)
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(colors::TEXT_PRIMARY),
+                .text_color(colors::TEXT_PRIMARY)
+                .opacity(move || if disabled() { 0.45_f32 } else { 1.0_f32 }),
         )
         .child(
             view()
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .child(view().w(px(96.0)).child(cozy_input(
+                .child(view().w(px(96.0)).child(cozy_input_with_disabled(
                     "0",
                     move || read().to_string(),
+                    disabled,
                     move |raw: &str| {
                         if let Ok(parsed) = raw.trim().parse::<u64>() {
                             write(parsed);
@@ -359,12 +420,16 @@ fn number_field_row(
                     },
                 )))
                 .child(
-                    view().w(px(44.0)).items_end().child(
-                        text(unit)
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(colors::TEXT_SECONDARY),
-                    ),
+                    view()
+                        .w(px(44.0))
+                        .items_end()
+                        .opacity(move || if disabled() { 0.45_f32 } else { 1.0_f32 })
+                        .child(
+                            text(unit)
+                                .text_xs()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(colors::TEXT_SECONDARY),
+                        ),
                 ),
         )
 }
@@ -372,190 +437,310 @@ fn number_field_row(
 fn timing_section(
     vm: Signal<SettingsViewModel>,
     on_autostart_change: Option<AutostartHook>,
+    animate: bool,
 ) -> impl IntoElement {
     view()
         .gap_5()
         .child(
             view()
                 .gap_3()
-                .child(section_header(
-                    "Break Schedule",
-                    "Configure short and long break cadence and durations.",
+                .child(stagger_item(
+                    0,
+                    animate,
+                    section_header(
+                        "Break Schedule",
+                        "Configure short and long break cadence and durations.",
+                    ),
                 ))
-                .child(number_field_row(
-                    "Short break interval",
-                    "secs",
-                    move || vm.with(|m| m.config.short_break_interval_secs),
-                    move |v| vm.update(|m| m.config.short_break_interval_secs = v),
+                .child(stagger_item(
+                    1,
+                    animate,
+                    number_field_row(
+                        "Short break interval",
+                        "secs",
+                        move || vm.with(|m| m.config.short_break_interval_secs),
+                        move |v| vm.update(|m| m.config.short_break_interval_secs = v),
+                    ),
                 ))
-                .child(number_field_row(
-                    "Short break duration",
-                    "secs",
-                    move || vm.with(|m| m.config.short_break_duration_secs),
-                    move |v| vm.update(|m| m.config.short_break_duration_secs = v),
+                .child(stagger_item(
+                    2,
+                    animate,
+                    number_field_row(
+                        "Short break duration",
+                        "secs",
+                        move || vm.with(|m| m.config.short_break_duration_secs),
+                        move |v| vm.update(|m| m.config.short_break_duration_secs = v),
+                    ),
                 ))
-                .child(number_field_row(
-                    "Long break interval",
-                    "secs",
-                    move || vm.with(|m| m.config.long_break_interval_secs),
-                    move |v| vm.update(|m| m.config.long_break_interval_secs = v),
+                .child(stagger_item(
+                    3,
+                    animate,
+                    number_field_row(
+                        "Long break interval",
+                        "secs",
+                        move || vm.with(|m| m.config.long_break_interval_secs),
+                        move |v| vm.update(|m| m.config.long_break_interval_secs = v),
+                    ),
                 ))
-                .child(number_field_row(
-                    "Long break duration",
-                    "secs",
-                    move || vm.with(|m| m.config.long_break_duration_secs),
-                    move |v| vm.update(|m| m.config.long_break_duration_secs = v),
+                .child(stagger_item(
+                    4,
+                    animate,
+                    number_field_row(
+                        "Long break duration",
+                        "secs",
+                        move || vm.with(|m| m.config.long_break_duration_secs),
+                        move |v| vm.update(|m| m.config.long_break_duration_secs = v),
+                    ),
                 )),
         )
-        .child(section_divider())
+        .child(stagger_item(5, animate, section_divider()))
         .child(
             view()
                 .gap_3()
-                .child(section_header(
-                    "Transitions & Controls",
-                    "Fine-tune warnings, fade-in speed, postpone length, session persistence, and OS startup.",
+                .child(stagger_item(
+                    6,
+                    animate,
+                    section_header(
+                        "Transitions & Controls",
+                        "Fine-tune warnings, fade-in speed, postpone length, session persistence, and OS startup.",
+                    ),
                 ))
-                .child(number_field_row(
-                    "Pre-break warning",
-                    "secs",
-                    move || vm.with(|m| m.config.pre_break_warning_secs),
-                    move |v| vm.update(|m| m.config.pre_break_warning_secs = v),
+                .child(stagger_item(
+                    7,
+                    animate,
+                    number_field_row(
+                        "Pre-break warning",
+                        "secs",
+                        move || vm.with(|m| m.config.pre_break_warning_secs),
+                        move |v| vm.update(|m| m.config.pre_break_warning_secs = v),
+                    ),
                 ))
-                .child(number_field_row(
-                    "Fade-in duration",
-                    "ms",
-                    move || vm.with(|m| m.config.fade_in_ms),
-                    move |v| vm.update(|m| m.config.fade_in_ms = v),
+                .child(stagger_item(
+                    8,
+                    animate,
+                    number_field_row(
+                        "Fade-in duration",
+                        "ms",
+                        move || vm.with(|m| m.config.fade_in_ms),
+                        move |v| vm.update(|m| m.config.fade_in_ms = v),
+                    ),
                 ))
-                .child(number_field_row(
-                    "Shortcut unlock delay",
-                    "secs",
-                    move || vm.with(|m| m.config.shortcut_disable_secs),
-                    move |v| vm.update(|m| m.config.shortcut_disable_secs = v),
+                .child(stagger_item(
+                    9,
+                    animate,
+                    number_field_row(
+                        "Shortcut unlock delay",
+                        "secs",
+                        move || vm.with(|m| m.config.shortcut_disable_secs),
+                        move |v| vm.update(|m| m.config.shortcut_disable_secs = v),
+                    ),
                 ))
-                .child(number_field_row(
-                    "Postpone duration",
-                    "secs",
-                    move || vm.with(|m| m.config.postpone_duration_secs),
-                    move |v| vm.update(|m| m.config.postpone_duration_secs = v),
+                .child(stagger_item(
+                    10,
+                    animate,
+                    number_field_row(
+                        "Postpone duration",
+                        "secs",
+                        move || vm.with(|m| m.config.postpone_duration_secs),
+                        move |v| vm.update(|m| m.config.postpone_duration_secs = v),
+                    ),
                 ))
-                .child(cozy_switch(
-                    "Randomize exercise order",
-                    move || vm.with(|m| m.config.random_order),
-                    move |v| vm.update(|m| m.config.random_order = v),
+                .child(stagger_item(
+                    11,
+                    animate,
+                    cozy_switch(
+                        "Randomize exercise order",
+                        move || vm.with(|m| m.config.random_order),
+                        move |v| vm.update(|m| m.config.random_order = v),
+                    ),
                 ))
-                .child(cozy_switch(
-                    "Persist session across restarts",
-                    move || vm.with(|m| m.config.persist_state),
-                    move |v| vm.update(|m| m.config.persist_state = v),
+                .child(stagger_item(
+                    12,
+                    animate,
+                    cozy_switch(
+                        "Persist session across restarts",
+                        move || vm.with(|m| m.config.persist_state),
+                        move |v| vm.update(|m| m.config.persist_state = v),
+                    ),
                 ))
-                .child(cozy_switch(
-                    "Launch at login (startup)",
-                    move || vm.with(|m| m.config.autostart),
-                    move |v| {
-                        vm.update(|m| m.config.autostart = v);
-                        if let Some(cb) = &on_autostart_change {
-                            cb(v);
-                        }
-                    },
+                .child(stagger_item(
+                    13,
+                    animate,
+                    cozy_switch(
+                        "Launch at login (startup)",
+                        move || vm.with(|m| m.config.autostart),
+                        move |v| {
+                            vm.update(|m| m.config.autostart = v);
+                            if let Some(cb) = &on_autostart_change {
+                                cb(v);
+                            }
+                        },
+                    ),
                 )),
         )
 }
 
-fn policies_section(vm: Signal<SettingsViewModel>) -> impl IntoElement {
+fn policies_section(vm: Signal<SettingsViewModel>, animate: bool) -> impl IntoElement {
     view()
         .gap_5()
         .child(
             view()
                 .gap_3()
-                .child(section_header(
-                    "Break Enforcement",
-                    "Control whether breaks can be skipped, postponed, or strictly enforced.",
+                .child(stagger_item(
+                    0,
+                    animate,
+                    section_header(
+                        "Break Enforcement",
+                        "Control whether breaks can be skipped, postponed, or strictly enforced.",
+                    ),
                 ))
-                .child(cozy_switch(
-                    "Strict break (hide Skip)",
-                    move || vm.with(|m| m.config.strict_break),
-                    move |v| vm.update(|m| m.config.strict_break = v),
+                .child(stagger_item(
+                    1,
+                    animate,
+                    cozy_switch(
+                        "Strict break (hide Skip)",
+                        move || vm.with(|m| m.config.strict_break),
+                        move |v| vm.update(|m| m.set_strict_break(v)),
+                    ),
                 ))
-                .child(cozy_switch(
-                    "Allow postpone (Space)",
-                    move || vm.with(|m| m.config.allow_postpone),
-                    move |v| vm.update(|m| m.config.allow_postpone = v),
+                .child(stagger_item(
+                    2,
+                    animate,
+                    cozy_switch(
+                        "Allow postpone (Space)",
+                        move || vm.with(|m| m.config.allow_postpone),
+                        move |v| vm.update(|m| m.config.allow_postpone = v),
+                    ),
                 ))
-                .child(cozy_switch(
-                    "Limit consecutive skips",
-                    move || vm.with(|m| m.config.limit_consecutive_skips.enabled),
-                    move |v| vm.update(|m| m.config.limit_consecutive_skips.enabled = v),
+                .child(stagger_item(
+                    3,
+                    animate,
+                    cozy_switch_with_disabled(
+                        "Limit consecutive skips",
+                        move || {
+                            vm.with(|m| {
+                                !m.config.strict_break && m.config.limit_consecutive_skips.enabled
+                            })
+                        },
+                        move || vm.with(|m| m.config.strict_break),
+                        move |v| vm.update(|m| m.set_limit_consecutive_skips(v)),
+                    ),
                 ))
-                .child(number_field_row(
-                    "Max consecutive skips",
-                    "skips",
-                    move || u64::from(vm.with(|m| m.config.limit_consecutive_skips.max_skips)),
-                    move |v| {
-                        vm.update(|m| {
-                            m.config.limit_consecutive_skips.max_skips =
-                                u32::try_from(v).unwrap_or(u32::MAX);
-                        });
-                    },
+                .child(stagger_item(
+                    4,
+                    animate,
+                    number_field_row_with_disabled(
+                        "Max consecutive skips",
+                        "skips",
+                        move || u64::from(vm.with(|m| m.config.limit_consecutive_skips.max_skips)),
+                        move || {
+                            vm.with(|m| {
+                                m.config.strict_break || !m.config.limit_consecutive_skips.enabled
+                            })
+                        },
+                        move |v| {
+                            vm.update(|m| {
+                                m.config.limit_consecutive_skips.max_skips =
+                                    u32::try_from(v).unwrap_or(u32::MAX);
+                            });
+                        },
+                    ),
                 )),
         )
-        .child(section_divider())
+        .child(stagger_item(5, animate, section_divider()))
         .child(
             view()
                 .gap_3()
-                .child(section_header(
-                    "Smart Pause & Do Not Disturb",
-                    "Automatically pause timers while idle, on battery, or in fullscreen apps.",
+                .child(stagger_item(
+                    6,
+                    animate,
+                    section_header(
+                        "Smart Pause & Do Not Disturb",
+                        "Automatically pause timers while idle, on battery, or in fullscreen apps.",
+                    ),
                 ))
-                .child(cozy_switch(
-                    "Smart Pause on idle",
-                    move || vm.with(|m| m.config.smart_pause.enabled),
-                    move |v| vm.update(|m| m.config.smart_pause.enabled = v),
+                .child(stagger_item(
+                    7,
+                    animate,
+                    cozy_switch(
+                        "Smart Pause on idle",
+                        move || vm.with(|m| m.config.smart_pause.enabled),
+                        move |v| vm.update(|m| m.config.smart_pause.enabled = v),
+                    ),
                 ))
-                .child(number_field_row(
-                    "Idle threshold",
-                    "secs",
-                    move || vm.with(|m| m.config.smart_pause.idle_threshold_secs),
-                    move |v| vm.update(|m| m.config.smart_pause.idle_threshold_secs = v),
+                .child(stagger_item(
+                    8,
+                    animate,
+                    number_field_row(
+                        "Idle threshold",
+                        "secs",
+                        move || vm.with(|m| m.config.smart_pause.idle_threshold_secs),
+                        move |v| vm.update(|m| m.config.smart_pause.idle_threshold_secs = v),
+                    ),
                 ))
-                .child(cozy_switch(
-                    "Do Not Disturb in fullscreen",
-                    move || vm.with(|m| m.config.do_not_disturb.enabled),
-                    move |v| vm.update(|m| m.config.do_not_disturb.enabled = v),
+                .child(stagger_item(
+                    9,
+                    animate,
+                    cozy_switch(
+                        "Do Not Disturb in fullscreen",
+                        move || vm.with(|m| m.config.do_not_disturb.enabled),
+                        move |v| vm.update(|m| m.config.do_not_disturb.enabled = v),
+                    ),
                 ))
-                .child(cozy_switch(
-                    "Pause while on battery",
-                    move || vm.with(|m| m.config.do_not_disturb.while_on_battery),
-                    move |v| vm.update(|m| m.config.do_not_disturb.while_on_battery = v),
+                .child(stagger_item(
+                    10,
+                    animate,
+                    cozy_switch(
+                        "Pause while on battery",
+                        move || vm.with(|m| m.config.do_not_disturb.while_on_battery),
+                        move |v| vm.update(|m| m.config.do_not_disturb.while_on_battery = v),
+                    ),
                 )),
         )
-        .child(section_divider())
+        .child(stagger_item(11, animate, section_divider()))
         .child(
             view()
                 .gap_3()
-                .child(section_header(
-                    "Audible Chime",
-                    "Play a gentle synthesized chime before or after breaks.",
+                .child(stagger_item(
+                    12,
+                    animate,
+                    section_header(
+                        "Audible Chime",
+                        "Play a gentle synthesized chime before or after breaks.",
+                    ),
                 ))
-                .child(cozy_switch(
-                    "Pre-break chime",
-                    move || vm.with(|m| m.config.audible_alert.pre_break),
-                    move |v| vm.update(|m| m.config.audible_alert.pre_break = v),
+                .child(stagger_item(
+                    13,
+                    animate,
+                    cozy_switch(
+                        "Pre-break chime",
+                        move || vm.with(|m| m.config.audible_alert.pre_break),
+                        move |v| vm.update(|m| m.config.audible_alert.pre_break = v),
+                    ),
                 ))
-                .child(cozy_switch(
-                    "Post-break chime",
-                    move || vm.with(|m| m.config.audible_alert.post_break),
-                    move |v| vm.update(|m| m.config.audible_alert.post_break = v),
+                .child(stagger_item(
+                    14,
+                    animate,
+                    cozy_switch(
+                        "Post-break chime",
+                        move || vm.with(|m| m.config.audible_alert.post_break),
+                        move |v| vm.update(|m| m.config.audible_alert.post_break = v),
+                    ),
                 ))
-                .child(number_field_row(
-                    "Chime volume",
-                    "0–100",
-                    move || u64::from(vm.with(|m| m.config.audible_alert.volume)),
-                    move |v| {
-                        vm.update(|m| {
-                            m.config.audible_alert.volume = u8::try_from(v.min(100)).unwrap_or(100);
-                        });
-                    },
+                .child(stagger_item(
+                    15,
+                    animate,
+                    number_field_row(
+                        "Chime volume",
+                        "0–100",
+                        move || u64::from(vm.with(|m| m.config.audible_alert.volume)),
+                        move |v| {
+                            vm.update(|m| {
+                                m.config.audible_alert.volume =
+                                    u8::try_from(v.min(100)).unwrap_or(100);
+                            });
+                        },
+                    ),
                 )),
         )
 }
@@ -563,11 +748,32 @@ fn policies_section(vm: Signal<SettingsViewModel>) -> impl IntoElement {
 fn exercise_tier_section(
     vm: Signal<SettingsViewModel>,
     kind: BreakType,
-    title: &'static str,
-    caption: &'static str,
-    placeholder: &'static str,
-    key_prefix: &'static str,
+    base_index: usize,
+    animate: bool,
 ) -> impl IntoElement {
+    let (title, caption, placeholder, key_prefix) = match kind {
+        BreakType::Short => (
+            "Short Break Exercises",
+            "Quick 15-second prompts cycled during work intervals.",
+            "Add a short exercise...",
+            "short",
+        ),
+        BreakType::Long => (
+            "Long Break Exercises",
+            "Restorative prompts shown after every four short breaks.",
+            "Add a long exercise...",
+            "long",
+        ),
+    };
+    let (bx1, by1, bx2, by2) = motion::COZY_STANDARD_BEZIER;
+    let initial_remaining = Rc::new(Cell::new(if animate {
+        vm.with_untracked(|m| match kind {
+            BreakType::Short => m.config.short_breaks.len(),
+            BreakType::Long => m.config.long_breaks.len(),
+        })
+    } else {
+        0
+    }));
     let items = computed(move || {
         vm.with(|m| {
             let list = match kind {
@@ -575,16 +781,21 @@ fn exercise_tier_section(
                 BreakType::Long => &m.config.long_breaks,
             };
             list.iter()
-                .enumerate()
-                .map(|(idx, spec)| (idx, spec.name.clone()))
+                .map(|spec| spec.name.clone())
                 .collect::<Vec<_>>()
         })
     });
 
     view()
         .gap_3()
-        .child(section_header(title, caption))
-        .child(
+        .child(stagger_item(
+            base_index,
+            animate,
+            section_header(title, caption),
+        ))
+        .child(stagger_item(
+            base_index + 1,
+            animate,
             view()
                 .flex_row()
                 .gap_2()
@@ -602,57 +813,63 @@ fn exercise_tier_section(
                         }
                     });
                 })),
-        )
+        ))
         .child(view().gap_2().child(each(
             items,
-            move |(idx, name)| format!("{key_prefix}-{idx}-{name}"),
-            move |item, _| {
-                view()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .rounded(radii::ELEMENT)
-                    .bg(colors::BACKGROUND_MUTED)
-                    .px_3()
-                    .py_2()
-                    .child(
-                        text(move || item.with(|(_, name)| name.clone()))
-                            .text_sm()
-                            .text_color(colors::TEXT_PRIMARY),
-                    )
-                    .child(destructive_button("Remove", move || {
-                        let idx = item.with(|(i, _)| *i);
-                        vm.update(|m| {
-                            let _ = m.remove_exercise(kind, idx);
-                        });
-                    }))
+            move |name| format!("{key_prefix}-{name}"),
+            move |item, row_idx| {
+                let rem = initial_remaining.get();
+                let row_animate = rem > 0;
+                if row_animate {
+                    initial_remaining.set(rem - 1);
+                }
+                let mount_idx = row_idx.get_untracked();
+                stagger_item(
+                    base_index + 2 + mount_idx,
+                    row_animate,
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .rounded(radii::ELEMENT)
+                        .bg(colors::BACKGROUND_MUTED)
+                        .transition_colors()
+                        .duration(motion::THEME_COLOR_MS)
+                        .ease_bezier(bx1, by1, bx2, by2)
+                        .px_3()
+                        .py_2()
+                        .child(
+                            text(move || item.get())
+                                .text_sm()
+                                .text_color(colors::TEXT_PRIMARY),
+                        )
+                        .child(destructive_button("Remove", move || {
+                            let idx = row_idx.get_untracked();
+                            vm.update(|m| {
+                                let _ = m.remove_exercise(kind, idx);
+                            });
+                        })),
+                )
             },
         )))
 }
 
-fn exercises_section(vm: Signal<SettingsViewModel>) -> impl IntoElement {
+fn exercises_section(vm: Signal<SettingsViewModel>, animate: bool) -> impl IntoElement {
+    let short_count = vm.with(|m| m.config.short_breaks.len());
+    let divider_idx = 2 + short_count;
     view()
         .gap_5()
-        .child(exercise_tier_section(
-            vm,
-            BreakType::Short,
-            "Short Break Exercises",
-            "Quick 15-second prompts cycled during work intervals.",
-            "Add a short exercise...",
-            "short",
-        ))
-        .child(section_divider())
+        .child(exercise_tier_section(vm, BreakType::Short, 0, animate))
+        .child(stagger_item(divider_idx, animate, section_divider()))
         .child(exercise_tier_section(
             vm,
             BreakType::Long,
-            "Long Break Exercises",
-            "Restorative prompts shown after every four short breaks.",
-            "Add a long exercise...",
-            "long",
+            divider_idx + 1,
+            animate,
         ))
 }
 
-fn about_section() -> impl IntoElement {
+fn about_section(animate: bool) -> impl IntoElement {
     view().gap_5().child(
         view()
             .flex_row()
@@ -663,18 +880,28 @@ fn about_section() -> impl IntoElement {
                 view()
                     .flex_1()
                     .gap_3()
-                    .child(section_header(
-                        "Support Safe Your Eyes",
-                        "Built in Rust with Native Shell (nsh) and the Cozy Design System for minimal footprint.",
+                    .child(stagger_item(
+                        0,
+                        animate,
+                        section_header(
+                            "Support Safe Your Eyes",
+                            "Built in Rust with Native Shell (nsh) and the Cozy Design System for minimal footprint.",
+                        ),
                     ))
-                    .child(
+                    .child(stagger_item(
+                        1,
+                        animate,
                         text(format!("Support link: {SUPPORT_URL}"))
                             .text_xs()
                             .text_color(colors::TEXT_SECONDARY),
-                    )
-                    .child(view().flex_row().child(support_link("Buy Me a Coffee"))),
+                    ))
+                    .child(stagger_item(
+                        2,
+                        animate,
+                        view().flex_row().child(support_link("Buy Me a Coffee")),
+                    )),
             )
-            .child(support_qr_card()),
+            .child(stagger_item(3, animate, support_qr_card())),
     )
 }
 
@@ -756,19 +983,16 @@ pub(crate) fn build_settings_view_with_hooks(
         }));
     }
 
+    let (bx1, by1, bx2, by2) = motion::COZY_STANDARD_BEZIER;
     let initial_appearance = appearance_for_theme_mode(initial_vm.config.theme);
     let vm = signal(initial_vm);
     let appearance = signal(initial_appearance);
-    let measured_theme_btn_center = signal(None::<[f32; 2]>);
-    let reveal_origin = signal([860.0_f32, 44.0_f32]);
-    let reveal_epoch = signal(0_u32);
+    let has_switched_tab = signal(false);
 
     let active_tab = computed(move || vm.with(|m| m.active_tab));
     let warning_msg = computed(move || vm.with(|m| m.load_warning.clone()));
     let error_msg = computed(move || vm.with(|m| m.validation_error.clone()));
 
-    let panel_opacity = animated_value(1.0);
-    let panel_y = animated_value(0.0);
     let highlight_scale = animated_value(1.0);
     let prev_tab = Cell::new(None::<SettingsTab>);
 
@@ -779,35 +1003,8 @@ pub(crate) fn build_settings_view_with_hooks(
             && prev != current
             && !reduce_motion()
         {
-            panel_opacity.set(0.0);
-            panel_opacity.timing(1.0, motion::PANEL_ENTER_MS, motion::COZY_EASE);
-
-            panel_y.set(6.0);
-            panel_y.timing(0.0, motion::PANEL_ENTER_MS, motion::COZY_EASE);
-
             highlight_scale.set(0.0);
             highlight_scale.timing(1.0, motion::HIGHLIGHT_SWEEP_MS, motion::COZY_EASE);
-        }
-    });
-
-    // Keep reveal_origin synced with live button center for external OS theme switches and Reset.
-    effect(move || {
-        if let Some(center) = measured_theme_btn_center.get() {
-            reveal_origin.set(center);
-        }
-    });
-
-    // Only trigger Cozy's Circular Theme Reveal when the resolved Light/Dark state actually flips
-    // and OS Reduce Motion is off (suppresses startup and no-op System -> Light/Dark clicks).
-    let prev_dark = Cell::new(None::<bool>);
-    effect(move || {
-        let now_dark = dark();
-        let previous = prev_dark.replace(Some(now_dark));
-        if let Some(prev) = previous
-            && prev != now_dark
-            && !reduce_motion()
-        {
-            reveal_epoch.update(|epoch| *epoch = epoch.wrapping_add(1));
         }
     });
 
@@ -829,7 +1026,14 @@ pub(crate) fn build_settings_view_with_hooks(
         sidebar_nav = sidebar_nav.child(sidebar_nav_item(
             tab.label(),
             move || active_tab.get() == tab,
-            move || vm.update(|m| m.active_tab = tab),
+            move || {
+                vm.update(|m| {
+                    if m.active_tab != tab {
+                        has_switched_tab.set(true);
+                        m.active_tab = tab;
+                    }
+                });
+            },
         ));
     }
 
@@ -840,6 +1044,9 @@ pub(crate) fn build_settings_view_with_hooks(
         .bg(colors::SIDEBAR_BG)
         .border_1()
         .border_color(colors::BORDER)
+        .transition_colors()
+        .duration(motion::THEME_COLOR_MS)
+        .ease_bezier(bx1, by1, bx2, by2)
         .p_3()
         .justify_between()
         .child(
@@ -911,7 +1118,9 @@ pub(crate) fn build_settings_view_with_hooks(
         }))
         .child(pastel_kpi_card(KpiTone::Mist, "Skip Limit", move || {
             vm.with(|m| {
-                if m.config.limit_consecutive_skips.enabled {
+                if m.config.strict_break {
+                    "Strict".to_owned()
+                } else if m.config.limit_consecutive_skips.enabled {
                     format!("{} max", m.config.limit_consecutive_skips.max_skips)
                 } else {
                     "Off".to_owned()
@@ -935,17 +1144,14 @@ pub(crate) fn build_settings_view_with_hooks(
                 ))
                 .child(theme_toggle_button(
                     move || theme_mode_for_appearance(appearance.get()),
-                    measured_theme_btn_center,
-                    move |origin| {
-                        let resolved_origin = origin.unwrap_or_else(|| {
-                            let win = window();
-                            [(win.width.0 - 60.0).max(0.0), title_bar().top.0 + 32.0]
-                        });
-                        reveal_origin.set(resolved_origin);
+                    move || {
                         let next_mode =
                             next_theme_mode(theme_mode_for_appearance(appearance.get()));
                         let next_appearance = appearance_for_theme_mode(next_mode);
-                        vm.update(|m| m.config.theme = next_mode);
+                        vm.update(|m| {
+                            m.config.theme = next_mode;
+                            let _ = m.persist_theme();
+                        });
                         appearance.set(next_appearance);
                         set_color_scheme(next_appearance);
                     },
@@ -964,29 +1170,42 @@ pub(crate) fn build_settings_view_with_hooks(
     let timing_hook = live_hook.as_ref().map(Arc::clone);
     let reset_hook = live_hook;
 
-    let form_scroll = scroll().flex_1().bg(colors::BACKGROUND_SURFACE).child(
-        view()
-            .p_5()
-            .bg(colors::BACKGROUND_SURFACE)
-            .bind_opacity(&panel_opacity)
-            .bind_translate_y(&panel_y)
-            .child(when(
-                move || active_tab.get() == SettingsTab::Timing,
-                move || timing_section(vm, timing_hook.as_ref().map(Arc::clone)),
-            ))
-            .child(when(
-                move || active_tab.get() == SettingsTab::Policies,
-                move || policies_section(vm),
-            ))
-            .child(when(
-                move || active_tab.get() == SettingsTab::Exercises,
-                move || exercises_section(vm),
-            ))
-            .child(when(
-                move || active_tab.get() == SettingsTab::About,
-                about_section,
-            )),
-    );
+    let form_scroll = scroll()
+        .flex_1()
+        .bg(colors::BACKGROUND_SURFACE)
+        .transition_colors()
+        .duration(motion::THEME_COLOR_MS)
+        .ease_bezier(bx1, by1, bx2, by2)
+        .child(
+            view()
+                .p_5()
+                .bg(colors::BACKGROUND_SURFACE)
+                .transition_colors()
+                .duration(motion::THEME_COLOR_MS)
+                .ease_bezier(bx1, by1, bx2, by2)
+                .child(when(
+                    move || active_tab.get() == SettingsTab::Timing,
+                    move || {
+                        timing_section(
+                            vm,
+                            timing_hook.as_ref().map(Arc::clone),
+                            has_switched_tab.get_untracked(),
+                        )
+                    },
+                ))
+                .child(when(
+                    move || active_tab.get() == SettingsTab::Policies,
+                    move || policies_section(vm, has_switched_tab.get_untracked()),
+                ))
+                .child(when(
+                    move || active_tab.get() == SettingsTab::Exercises,
+                    move || exercises_section(vm, has_switched_tab.get_untracked()),
+                ))
+                .child(when(
+                    move || active_tab.get() == SettingsTab::About,
+                    move || about_section(has_switched_tab.get_untracked()),
+                )),
+        );
 
     let sticky_toolbar = view()
         .flex_shrink_0()
@@ -998,6 +1217,9 @@ pub(crate) fn build_settings_view_with_hooks(
         .bg(colors::BACKGROUND_SURFACE)
         .border_t_1()
         .border_color(colors::BORDER)
+        .transition_colors()
+        .duration(motion::THEME_COLOR_MS)
+        .ease_bezier(bx1, by1, bx2, by2)
         .child(
             view()
                 .flex_row()
@@ -1032,9 +1254,6 @@ pub(crate) fn build_settings_view_with_hooks(
                         cb(next);
                     }
                     let default_appearance = appearance_for_theme_mode(ThemeMode::default());
-                    if let Some(center) = measured_theme_btn_center.get() {
-                        reveal_origin.set(center);
-                    }
                     appearance.set(default_appearance);
                     set_color_scheme(default_appearance);
                 })),
@@ -1056,6 +1275,9 @@ pub(crate) fn build_settings_view_with_hooks(
         .bg(colors::BACKGROUND_SURFACE)
         .border_1()
         .border_color(colors::BORDER)
+        .transition_colors()
+        .duration(motion::THEME_COLOR_MS)
+        .ease_bezier(bx1, by1, bx2, by2)
         .overflow_hidden()
         .child(form_scroll)
         .child(sticky_toolbar);
@@ -1076,26 +1298,17 @@ pub(crate) fn build_settings_view_with_hooks(
         .child(page_header)
         .child(form_card);
 
-    let mut root = view()
+    view()
         .flex_1()
         .bg(colors::BACKGROUND_BODY)
+        .transition_colors()
+        .duration(motion::THEME_COLOR_MS)
+        .ease_bezier(bx1, by1, bx2, by2)
         .flex_row()
         .p_3()
         .gap_3()
         .child(sidebar)
-        .child(right_pane);
-
-    if let Some(shader) = theme_reveal_shader() {
-        root = root.child(
-            screen_transition()
-                .source(shader)
-                .duration(Duration::from_millis(motion::THEME_REVEAL_MS))
-                .uniform("origin", move || reveal_origin.get())
-                .value(move || TransitionKey::number(f64::from(reveal_epoch.get()))),
-        );
-    }
-
-    root
+        .child(right_pane)
 }
 
 #[component]
@@ -1251,7 +1464,7 @@ mod tests {
         vm.config.long_break_interval_secs = 3600;
         vm.config.long_break_duration_secs = 90;
         vm.config.pre_break_warning_secs = 15;
-        vm.config.strict_break = true;
+        vm.config.strict_break = false;
         vm.config.allow_postpone = true;
         vm.config.postpone_duration_secs = 180;
         vm.config.random_order = false;
@@ -1423,17 +1636,23 @@ mod tests {
 
     #[test]
     fn nsh_headless_settings_navigates_sidebar_cycles_theme_and_toggles_switch()
-    -> Result<(), String> {
+    -> Result<(), Box<dyn std::error::Error>> {
         use nsh_engine::{EngineConfig, Points, Root, Size};
         use nsh_testing::Headless;
 
+        let dir = RepoTempDir::new("headless-nav")?;
+        static NAV_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+        if let Ok(mut guard) = NAV_PATH.lock() {
+            *guard = Some(dir.file("headless-settings-test.toml"));
+        }
+
         #[component]
         fn TestSettings() -> impl IntoElement {
-            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("..")
-                .join(".tmp")
-                .join("headless-settings-test.toml");
+            let path = NAV_PATH
+                .lock()
+                .ok()
+                .and_then(|mut g| g.take())
+                .unwrap_or_default();
             let vm = SettingsViewModel::load(path);
             let sink = Arc::new(Mutex::new(None));
             build_settings_view(vm, sink, false)
@@ -1466,6 +1685,7 @@ mod tests {
         assert!(!app.shows("Settings"));
         assert!(app.shows("Theme: System"));
         app.press("Strict break (hide Skip)")?;
+        app.wait_for("Strict")?;
 
         // Navigate to Exercises.
         app.press("Exercises")?;
@@ -1483,7 +1703,9 @@ mod tests {
     }
 
     #[test]
-    fn nsh_headless_theme_save_reset_and_cancel() -> Result<(), Box<dyn std::error::Error>> {
+    fn nsh_headless_theme_persists_on_toggle_without_saving_unsaved_form_edits()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use nsh_core::MountItem;
         use nsh_engine::{EngineConfig, Points, Root, Size};
         use nsh_testing::Headless;
 
@@ -1509,16 +1731,30 @@ mod tests {
         if let Ok(mut guard) = TEST_PATH.lock() {
             *guard = Some(save_path.clone());
         }
+        let saw_shader_transition = Arc::new(AtomicBool::new(false));
+        let shader_flag = Arc::clone(&saw_shader_transition);
+
         let mut app = Headless::start(EngineConfig {
             viewport: Size::new(Points(920.0), Points(680.0)),
             ..EngineConfig::new(Root::of::<TestPersistSettings>())
         })
         .map_err(|e| e.to_string())?;
+        app.observe(move |_step, batch| {
+            for item in &batch.items {
+                if matches!(item, MountItem::ShaderTransition { .. }) {
+                    shader_flag.store(true, Ordering::Release);
+                }
+            }
+        });
         app.wait_for("Theme: System")?;
         app.press("Theme: System")?;
         app.wait_for("Theme: Light")?;
         app.press("Theme: Light")?;
         app.wait_for("Theme: Dark")?;
+        assert!(
+            !saw_shader_transition.load(Ordering::Acquire),
+            "Theme toggle must not trigger flashing ShaderTransition"
+        );
         app.press("Reset")?;
         app.wait_for("Theme: System")?;
         app.press("Theme: System")?;
@@ -1532,7 +1768,8 @@ mod tests {
         assert_eq!(reloaded.theme, ThemeMode::Light);
         assert!(reloaded.strict_break);
 
-        // Cycle theme and Cancel: nothing written to disk.
+        // Toggle theme, make an unsaved form edit, then close/Cancel:
+        // theme must be persisted while the unsaved form edit is discarded.
         if let Ok(mut guard) = TEST_PATH.lock() {
             *guard = Some(cancel_path.clone());
         }
@@ -1544,8 +1781,202 @@ mod tests {
         app2.wait_for("Theme: System")?;
         app2.press("Theme: System")?;
         app2.wait_for("Theme: Light")?;
+        app2.press("Theme: Light")?;
+        app2.wait_for("Theme: Dark")?;
+        app2.press("Policies")?;
+        app2.wait_for("Break Enforcement")?;
+        app2.press("Strict break (hide Skip)")?;
         app2.press("Cancel")?;
-        assert!(!cancel_path.exists());
+
+        let after_cancel = Config::load_from_path(&cancel_path)?;
+        assert_eq!(after_cancel.theme, ThemeMode::Dark);
+        assert!(!after_cancel.strict_break);
+        Ok(())
+    }
+
+    #[test]
+    fn strict_break_auto_disables_skip_limit_and_updates_kpi()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use nsh_engine::{EngineConfig, Points, Root, Size};
+        use nsh_testing::Headless;
+
+        let dir = RepoTempDir::new("strict-vs-skip")?;
+        let path = dir.file("strict-vs-skip.toml");
+
+        let mut vm = SettingsViewModel::load(path.clone());
+        vm.set_limit_consecutive_skips(true);
+        assert!(vm.config.limit_consecutive_skips.enabled);
+        vm.set_strict_break(true);
+        assert!(vm.config.strict_break);
+        assert!(!vm.config.limit_consecutive_skips.enabled);
+        vm.set_limit_consecutive_skips(true);
+        assert!(!vm.config.limit_consecutive_skips.enabled);
+        vm.set_strict_break(false);
+        vm.set_limit_consecutive_skips(true);
+        assert!(vm.config.limit_consecutive_skips.enabled);
+
+        static STRICT_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+        if let Ok(mut guard) = STRICT_PATH.lock() {
+            *guard = Some(path.clone());
+        }
+
+        #[component]
+        fn TestStrictSettings() -> impl IntoElement {
+            let path = STRICT_PATH
+                .lock()
+                .ok()
+                .and_then(|mut g| g.take())
+                .unwrap_or_default();
+            let vm = SettingsViewModel::load(path);
+            let sink = Arc::new(Mutex::new(None));
+            build_settings_view(vm, sink, false)
+        }
+
+        let mut app = Headless::start(EngineConfig {
+            viewport: Size::new(Points(920.0), Points(680.0)),
+            ..EngineConfig::new(Root::of::<TestStrictSettings>())
+        })
+        .map_err(|e| e.to_string())?;
+        app.wait_for("Timing")?;
+        app.press("Policies")?;
+        app.wait_for("Break Enforcement")?;
+        assert!(app.shows("Off"));
+
+        // Enable skip limit -> KPI shows "2 max".
+        app.press("Limit consecutive skips")?;
+        app.wait_for("2 max")?;
+
+        // Enable strict break -> auto-disables skip limit and KPI switches to "Strict".
+        app.press("Strict break (hide Skip)")?;
+        app.wait_for("Strict")?;
+        assert!(!app.shows("2 max"));
+
+        // Save and verify persisted config has strict_break=true and limit_consecutive_skips=false.
+        app.press("Save")?;
+        let saved = Config::load_from_path(&path)?;
+        assert!(saved.strict_break);
+        assert!(!saved.limit_consecutive_skips.enabled);
+
+        let mut legacy = Config {
+            strict_break: true,
+            ..Config::default()
+        };
+        legacy.limit_consecutive_skips.enabled = true;
+        legacy.save_to_path(&path)?;
+        let loaded_legacy = SettingsViewModel::load(path);
+        assert!(loaded_legacy.config.strict_break);
+        assert!(!loaded_legacy.config.limit_consecutive_skips.enabled);
+        Ok(())
+    }
+
+    #[test]
+    fn persist_theme_preserves_system_autostart_baseline() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let dir = RepoTempDir::new("persist-theme-autostart")?;
+        let path = dir.file("theme-autostart.toml");
+
+        let mut vm = load_settings_vm(path.clone(), Some(true));
+        vm.config.short_break_interval_secs = 123;
+        vm.config.theme = ThemeMode::Dark;
+        vm.persist_theme()?;
+
+        let saved = Config::load_from_path(&path)?;
+        assert_eq!(saved.theme, ThemeMode::Dark);
+        assert!(saved.autostart);
+        assert_eq!(saved.short_break_interval_secs, 900);
+        Ok(())
+    }
+
+    #[test]
+    fn nsh_headless_tab_switch_triggers_staggered_list_item_animations()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use nsh_core::MountItem;
+        use nsh_core::animation::{AnimationOp, Driver};
+        use nsh_engine::{EngineConfig, Points, Root, Size};
+        use nsh_testing::Headless;
+
+        let dir = RepoTempDir::new("stagger")?;
+        static STAGGER_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+        if let Ok(mut guard) = STAGGER_PATH.lock() {
+            *guard = Some(dir.file("stagger.toml"));
+        }
+
+        #[component]
+        fn TestStaggerSettings() -> impl IntoElement {
+            let path = STAGGER_PATH
+                .lock()
+                .ok()
+                .and_then(|mut g| g.take())
+                .unwrap_or_default();
+            let vm = SettingsViewModel::load(path);
+            let sink = Arc::new(Mutex::new(None));
+            build_settings_view(vm, sink, false)
+        }
+
+        let observed_delays: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&observed_delays);
+
+        let mut app = Headless::start(EngineConfig {
+            viewport: Size::new(Points(920.0), Points(680.0)),
+            ..EngineConfig::new(Root::of::<TestStaggerSettings>())
+        })
+        .map_err(|e| e.to_string())?;
+        app.observe(move |_step, batch| {
+            for item in &batch.items {
+                if let MountItem::Animation(AnimationOp::Start {
+                    driver:
+                        Driver::Timing {
+                            duration_ms,
+                            delay_ms,
+                            ..
+                        },
+                    ..
+                }) = item
+                    && (*duration_ms - motion::ROW_ENTER_MS).abs() < 0.01
+                    && let Ok(mut guard) = sink.lock()
+                {
+                    guard.push(*delay_ms);
+                }
+            }
+        });
+
+        app.wait_for("Break Schedule")?;
+        // Cozy motion rule: do not animate list items on initial window load.
+        assert!(
+            observed_delays
+                .lock()
+                .map_err(|e| e.to_string())?
+                .is_empty(),
+            "Initial settings load must not trigger staggered row entrance"
+        );
+
+        app.press("Policies")?;
+        app.wait_for("Break Enforcement")?;
+        let delays = observed_delays.lock().map_err(|e| e.to_string())?.clone();
+        assert!(
+            delays.contains(&0.0) && delays.contains(&28.0) && delays.contains(&56.0),
+            "Expected Cozy 28ms staggered delays on tab switch, got {delays:?}"
+        );
+        assert!(
+            delays.iter().all(|&d| d <= 336.0),
+            "Expected staggered delays capped at 12 * 28ms = 336ms, got {delays:?}"
+        );
+
+        app.press("Exercises")?;
+        app.wait_for("Short Break Exercises")?;
+        assert!(app.shows("19"));
+        if let Ok(mut guard) = observed_delays.lock() {
+            guard.clear();
+        }
+        app.press("Remove >> nth=0")?;
+        app.wait_for("18")?;
+        assert!(
+            observed_delays
+                .lock()
+                .map_err(|e| e.to_string())?
+                .is_empty(),
+            "In-place exercise edits must not re-trigger tab-switch stagger animation"
+        );
         Ok(())
     }
 
