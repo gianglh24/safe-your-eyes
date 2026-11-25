@@ -263,21 +263,36 @@ fn overlay_main_window_options_for_primary(
     attrs.taskbar = Some(false);
     attrs.shadow = Some(false);
 
-    let (width, height) = primary.map_or((1920.0, 1080.0), |rect| (rect.width, rect.height));
-
     let mut main_window = MainWindowOptions::default();
-    main_window.default_size = Some(size(px(width), px(height)));
     if let Some(rect) = primary {
+        main_window.default_size = Some(size(px(rect.width), px(rect.height)));
         main_window.default_position = Some(WindowPosition::At(point(px(rect.x), px(rect.y))));
+    } else if cfg!(not(target_os = "windows")) {
+        main_window.default_size = Some(size(px(1920.0), px(1080.0)));
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        // Avoid `WindowMode::FullScreen` on macOS: AppKit's `toggleFullScreen:` conflicts with
-        // `Workspaces::All` and triggers a slow Space slide animation instead of instant cover.
         main_window.default_mode = Some(nsh_core::desktop::WindowMode::FullScreen);
     }
     main_window.attributes = attrs;
     main_window
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn apply_window_bounds(win: &nsh_core::element::desktop::WindowRef, b: Bounds<Points>) {
+    if b.size.width.is_finite()
+        && b.size.width.0 > 0.0
+        && b.size.height.is_finite()
+        && b.size.height.0 > 0.0
+    {
+        win.set_bounds(nsh_core::desktop::WindowFrame {
+            x: Some(b.origin.x),
+            y: Some(b.origin.y),
+            width: Some(b.size.width),
+            height: Some(b.size.height),
+            animated: Some(false),
+        });
+    }
 }
 
 fn overlay_main_window_options() -> MainWindowOptions {
@@ -539,21 +554,9 @@ pub(crate) fn build_overlay_view(
                 .find(|d| d.primary)
                 .or_else(|| disp_list.first())
             {
-                #[cfg(target_os = "macos")]
-                if primary.bounds.size.width.is_finite()
-                    && primary.bounds.size.width.0 > 0.0
-                    && primary.bounds.size.height.is_finite()
-                    && primary.bounds.size.height.0 > 0.0
-                {
-                    effect_win.set_bounds(nsh_core::desktop::WindowFrame {
-                        x: Some(primary.bounds.origin.x),
-                        y: Some(primary.bounds.origin.y),
-                        width: Some(primary.bounds.size.width),
-                        height: Some(primary.bounds.size.height),
-                        animated: Some(false),
-                    });
-                }
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                apply_window_bounds(&effect_win, primary.bounds);
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                 {
                     let _ = primary;
                     effect_win.set_mode(nsh_core::desktop::WindowMode::FullScreen);
@@ -563,6 +566,17 @@ pub(crate) fn build_overlay_view(
         main_win.focus();
         let focus_win = main_win;
         drop(set_timeout(Duration::from_millis(50), move || {
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            {
+                let disp_list = displays();
+                if let Some(primary) = disp_list
+                    .iter()
+                    .find(|d| d.primary)
+                    .or_else(|| disp_list.first())
+                {
+                    apply_window_bounds(&focus_win, primary.bounds);
+                }
+            }
             focus_win.focus();
         }));
 
@@ -592,29 +606,14 @@ pub(crate) fn build_overlay_view(
                     .display(disp_id)
                     .default_position(WindowPosition::At(disp_bounds.origin))
                     .default_size(disp_bounds.size);
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                 let sec_win_el = sec_win_el.default_mode(nsh_core::desktop::WindowMode::FullScreen);
                 sec_win_el.content(move || {
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
                     {
-                        // AppKit constrains initial placement below the menu bar before
-                        // `NSStatusWindowLevel` applies, and drops requests sent before mount.
                         let sec_win = current_window();
-                        let apply_bounds = move |b: Bounds<Points>| {
-                            if b.size.width.is_finite()
-                                && b.size.width.0 > 0.0
-                                && b.size.height.is_finite()
-                                && b.size.height.0 > 0.0
-                            {
-                                sec_win.set_bounds(nsh_core::desktop::WindowFrame {
-                                    x: Some(b.origin.x),
-                                    y: Some(b.origin.y),
-                                    width: Some(b.size.width),
-                                    height: Some(b.size.height),
-                                    animated: Some(false),
-                                });
-                            }
-                        };
+                        let apply_bounds =
+                            move |b: Bounds<Points>| apply_window_bounds(&sec_win, b);
                         let apply_reactive = apply_bounds.clone();
                         effect(move || {
                             apply_reactive(d.with(|disp| disp.bounds));
@@ -942,16 +941,19 @@ mod tests {
         assert_eq!(opts.attributes.close_on_press, Some(false));
         assert_eq!(opts.attributes.taskbar, Some(false));
         assert_eq!(opts.attributes.shadow, Some(false));
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         assert_eq!(
             opts.default_mode,
             Some(nsh_core::desktop::WindowMode::FullScreen)
         );
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         assert_eq!(opts.default_mode, None);
 
         let fallback = overlay_main_window_options_for_primary(None);
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(fallback.default_size, Some(size(px(1920.0), px(1080.0))));
+        #[cfg(target_os = "windows")]
+        assert_eq!(fallback.default_size, None);
         assert_eq!(fallback.default_position, None);
 
         let custom = overlay_main_window_options_for_primary(Some(crate::MonitorRect {
