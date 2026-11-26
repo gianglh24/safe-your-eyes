@@ -297,7 +297,12 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
             break;
         }
 
-        if restart_on_settings_close && scheduler.state() != SchedulerState::Waiting {
+        if restart_on_settings_close
+            && !matches!(
+                scheduler.state(),
+                SchedulerState::Waiting | SchedulerState::Resting
+            )
+        {
             restart_on_settings_close = false;
         }
         let settings_exited = host.take_settings_exited();

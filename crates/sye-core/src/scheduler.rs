@@ -81,24 +81,15 @@ pub enum SchedulerEvent {
     Start,
     Tick,
     Enable,
-    Disable {
-        duration_secs: Option<u64>,
-    },
+    Disable { duration_secs: Option<u64> },
     EnterResting,
-    ExitResting {
-        credit_idle_secs: Option<u64>,
-    },
+    ExitResting { credit_idle_secs: Option<u64> },
     IdleObserved(Duration),
-    TakeBreak {
-        kind: Option<BreakType>,
-    },
+    TakeBreak { kind: Option<BreakType> },
     OverlayFinished(OverlayOutcome),
-    DeferBreak {
-        delay_secs: u64,
-    },
+    DeferBreak { delay_secs: u64 },
     CancelCurrentBreak,
     ReloadConfig(Config),
-    /// Starts the current wait again from its full interval (only in `Waiting`).
     RestartCountdown,
     Quit,
 }
@@ -563,7 +554,6 @@ impl<C: Clock> Scheduler<C> {
         actions
     }
 
-    /// `credit_ms` is countdown time to give back on top of what remains.
     fn handle_enter_resting(&mut self, credit_ms: u64) -> Vec<SchedulerAction> {
         match self.state {
             SchedulerState::Waiting | SchedulerState::PreBreak | SchedulerState::Break => {}
