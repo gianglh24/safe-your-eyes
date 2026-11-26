@@ -145,6 +145,7 @@ fn run_internal_overlay(payload_json: &str) -> ExitCode {
     });
     let on_shown: sye_ui::OverlayShownCallback = Box::new(|| {
         write_overlay_shown();
+        sye_platform::take_foreground_for_own_window();
         sye_platform::mark_own_windows_fullscreen();
     });
     match sye_ui::run_overlay_with_hook(request, Some(on_shown), Some(on_outcome)) {
