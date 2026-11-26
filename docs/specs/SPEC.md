@@ -363,6 +363,7 @@ This section lists the operating system and framework limits that the code works
 9. Native caption buttons occupy the top-right corner on Windows and Linux. The Settings window keeps clear space at the top for window drag.
 10. Windows blocks `SetForegroundWindow` when the daemon does not hold the foreground lock, and UIPI blocks `AttachThreadInput` against elevated windows. `PlatformEventLoop::activate_child` restores a minimized child window, attaches thread input when `SetForegroundWindow` fails, and toggles `HWND_TOPMOST` briefly if focus still fails.
 11. `Path::canonicalize` returns a `\\?\` verbatim prefix on Windows. `sye-platform` strips that prefix before it writes the Windows startup command.
+12. The Start menu and other shell surfaces hold the foreground lock, so `SetForegroundWindow` from the overlay fails and the taskbar stays above the overlay. Windows lets the process that sent the last input event take the foreground. When another process owns the foreground, the overlay sends a zero mouse move with `SendInput` and then activates its primary window, before it marks its windows full screen. A key press is not used because `Esc` is the overlay Skip key.
 
 ### 12.3 Linux
 
