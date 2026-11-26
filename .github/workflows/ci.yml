@@ -4,7 +4,15 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths: &code
+      - "crates/**"
+      - "assets/**"
+      - "e2e/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/ci.yml"
   pull_request:
+    paths: *code
   workflow_dispatch:
 
 env:
@@ -71,12 +79,18 @@ jobs:
           echo "- **SHA-256**: \`$SHA256\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **VirusTotal Report**: https://www.virustotal.com/gui/file/$SHA256" >> "$GITHUB_STEP_SUMMARY"
           if [ -n "$VT_API_KEY" ]; then
-            curl --silent --show-error --fail \
+            STATUS=$(curl --silent --show-error \
+              --output /dev/null --write-out '%{http_code}' \
               --request POST \
               --url https://www.virustotal.com/api/v3/files \
               --header "x-apikey: $VT_API_KEY" \
-              --form "file=@$BIN" > /dev/null
-            echo "- **VirusTotal Upload**: Submitted to VirusTotal API v3" >> "$GITHUB_STEP_SUMMARY"
+              --form "file=@$BIN")
+            # VirusTotal answers 409 when it already has this exact file, e.g. after a docs-only commit rebuilds the same binary.
+            case "$STATUS" in
+              200) echo "- **VirusTotal Upload**: Submitted to VirusTotal API v3" >> "$GITHUB_STEP_SUMMARY" ;;
+              409) echo "- **VirusTotal Upload**: VirusTotal already has this file" >> "$GITHUB_STEP_SUMMARY" ;;
+              *) echo "::error::VirusTotal upload failed with HTTP $STATUS"; exit 1 ;;
+            esac
           else
             echo "- **VirusTotal Upload**: Skipped (\`VT_API_KEY\` repository secret not configured)" >> "$GITHUB_STEP_SUMMARY"
           fi

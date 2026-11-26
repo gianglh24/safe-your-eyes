@@ -5,6 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Safe Your Eyes</title>
   <meta name="description" content="A small open-source Rust app for Windows, macOS and Linux that reminds you to rest your eyes.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Safe Your Eyes">
+  <meta property="og:description" content="A small open-source Rust app for Windows, macOS and Linux that reminds you to rest your eyes.">
+  <meta property="og:url" content="https://tunglt1810.github.io/safe-your-eyes/">
+  <meta property="og:image" content="https://tunglt1810.github.io/safe-your-eyes/assets/og-card.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Safe Your Eyes: rest your eyes for a bit, then get back to work">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="preload" as="image" href="assets/og-image.jpg" fetchpriority="high">
   <style>
     :root {
       --bg-body: #FAEBDA;
@@ -115,6 +128,47 @@
       margin-bottom: 28px;
     }
 
+    .lang-switch {
+      display: flex;
+      padding: 2px;
+      border-radius: 9999px;
+      background: var(--bg-muted);
+      border: 1px solid var(--border);
+    }
+
+    .lang-switch button {
+      padding: 2px 10px;
+      border: 0;
+      border-radius: 9999px;
+      background: none;
+      color: var(--text-secondary);
+      font: inherit;
+      font-size: 0.8rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .lang-switch button[aria-pressed="true"] {
+      background: var(--accent);
+      color: var(--on-accent);
+    }
+
+    .star-count {
+      padding: 2px 8px;
+      border-radius: 9999px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+
+    .version {
+      flex-basis: 100%;
+      margin: 0;
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+
     .btn {
       display: inline-flex;
       align-items: center;
@@ -136,11 +190,8 @@
       color: var(--on-accent);
     }
 
-    .btn-icon {
-      width: 48px;
-      height: 48px;
-      padding: 0;
-      border-radius: 9999px;
+    .btn-secondary {
+      padding: 11px 21px;
       background: var(--bg-muted);
       border: 1px solid var(--border);
       color: var(--text-primary);
@@ -154,7 +205,7 @@
       background: var(--bg-body);
     }
 
-    .media-frame img {
+    .media-frame video {
       display: block;
       width: 100%;
       height: auto;
@@ -264,75 +315,85 @@
     <section class="hero">
       <div class="badge-row">
         <a href="https://github.com/tunglt1810/safe-your-eyes/actions/workflows/ci.yml">
-          <img src="https://github.com/tunglt1810/safe-your-eyes/actions/workflows/ci.yml/badge.svg" alt="CI Status">
+          <img src="https://github.com/tunglt1810/safe-your-eyes/actions/workflows/ci.yml/badge.svg" alt="CI Status" height="20">
         </a>
         <a href="https://github.com/tunglt1810/safe-your-eyes/releases">
-          <img src="https://img.shields.io/badge/VirusTotal-SHA256%20Scanned-394EFF?logo=virustotal&logoColor=white" alt="VirusTotal SHA256 Scanned">
+          <img src="https://img.shields.io/badge/VirusTotal-SHA256%20Scanned-394EFF?logo=virustotal&logoColor=white" alt="VirusTotal SHA256 Scanned" height="20">
         </a>
         <span class="badge">Windows · macOS · Linux (x86_64 &amp; ARM64)</span>
         <span class="badge">GPL-2.0-only</span>
+        <div class="lang-switch" role="group" aria-label="Language">
+          <button type="button" data-lang="en">EN</button>
+          <button type="button" data-lang="vi">VI</button>
+        </div>
       </div>
       <h1>Safe Your Eyes</h1>
-      <p class="lead">
-        I built this because working with AI made me forget to look away from the screen.
-        Every so often it asks you to close your eyes for a bit. Then you get back to work.
+      <p class="lead" data-i18n="lead">
+        AI writes the code. You forget to blink. This app taps you on the shoulder, makes you close your eyes for a bit, then hands you back to your work.
       </p>
       <div class="actions">
-        <a class="btn btn-primary" href="https://github.com/tunglt1810/safe-your-eyes/releases">Download</a>
-        <a class="btn btn-icon" href="https://github.com/tunglt1810/safe-your-eyes" aria-label="GitHub Repository" title="View on GitHub">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <a class="btn btn-primary" id="download" href="https://github.com/tunglt1810/safe-your-eyes/releases/latest">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>
+          </svg>
+          <span id="download-label">Download</span>
+        </a>
+        <a class="btn btn-secondary" href="https://github.com/tunglt1810/safe-your-eyes">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M12 0.297C5.37 0.297 0 5.67 0 12.297c0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.385-1.335-1.755-1.335-1.755-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
           </svg>
+          <span data-i18n="star">Star on GitHub</span>
+          <span class="star-count" id="star-count" hidden></span>
         </a>
+        <p class="version" id="version" hidden><span data-i18n="latest">Latest:</span> <a id="version-link" href="https://github.com/tunglt1810/safe-your-eyes/releases/latest"></a></p>
       </div>
       <figure class="media-frame">
-        <img src="assets/storyline.gif" alt="Safe Your Eyes workday comic">
+        <video src="assets/storyline.mp4" poster="assets/og-image.jpg" width="900" height="900" muted loop playsinline controls preload="metadata" aria-label="Safe Your Eyes workday comic"></video>
       </figure>
     </section>
 
     <section class="grid" aria-label="Highlights">
       <article class="card sage">
-        <h3>Breaks that stay out of the way</h3>
-        <p>15 seconds every 15 minutes, 60 seconds every 75 minutes. A notice comes first, and a 2-second key lock stops accidental skips.</p>
+        <h3 data-i18n="c1h">Tiny breaks, zero drama</h3>
+        <p data-i18n="c1p">15 seconds every 15 minutes, a whole minute every 75. It warns you first, then locks the keys for 2 seconds so your fingers can't skip it out of habit.</p>
       </article>
       <article class="card peach">
-        <h3>Knows when to wait</h3>
-        <p>It pauses when you are idle and holds off during fullscreen apps or on battery. Strict mode is there if you want it.</p>
+        <h3 data-i18n="c2h">Knows when to hush</h3>
+        <p data-i18n="c2p">Walk away and it stops counting. It also saves the reminder for later while you're fullscreen or on battery.</p>
       </article>
       <article class="card butter">
-        <h3>0% GPU while idle</h3>
-        <p>One binary, no Tokio. The UI only starts for a break or when you open Settings.</p>
+        <h3 data-i18n="c3h">Featherweight</h3>
+        <p data-i18n="c3p">Your computer will barely notice it. It only shows up when it's break time.</p>
       </article>
       <article class="card mist">
-        <h3>No admin rights</h3>
-        <p>Everything lives in your user account, on every OS.</p>
+        <h3 data-i18n="c4h">No admin password</h3>
+        <p data-i18n="c4p">Installs into your own account. No IT ticket needed.</p>
       </article>
     </section>
 
     <section class="section">
-      <h2>Settings</h2>
-      <p>Change the timings and the rules from a native window. It follows your system theme.</p>
+      <h2 data-i18n="setH">Settings</h2>
+      <p data-i18n="setP">Make breaks longer, or space them out, right here. The window follows your light or dark mode.</p>
       <figure class="media-frame">
-        <img src="assets/ui-demo.gif" alt="Safe Your Eyes Cozy Settings UI preview">
+        <video src="assets/ui-demo.mp4" poster="assets/ui-demo-poster.jpg" width="720" height="532" muted loop playsinline controls preload="none" aria-label="Safe Your Eyes Cozy Settings UI preview"></video>
       </figure>
     </section>
 
     <section class="section" id="code-signing-policy">
-      <h2>Code Signing Policy</h2>
-      <p>
-        Free code signing provided by <a href="https://signpath.io/">SignPath.io</a>, certificate by
-        <a href="https://signpath.org/">SignPath Foundation</a>.
+      <h2 data-i18n="csH">Code Signing Policy</h2>
+      <p data-i18n="csP">
+        Installers are signed for free by <a href="https://signpath.io/">SignPath.io</a>, with a certificate from <a href="https://signpath.org/">SignPath Foundation</a>. That's how your computer knows nobody messed with the file.
       </p>
       <ul>
-        <li><strong>Source &amp; Build Transparency</strong>: All official binaries are built from the public GitHub repository (<a href="https://github.com/tunglt1810/safe-your-eyes">tunglt1810/safe-your-eyes</a>) using public GitHub Actions workflows and scanned on VirusTotal.</li>
-        <li><strong>Maintainers &amp; Roles</strong>: Committers, Reviewers, and Approvers: <a href="https://github.com/tunglt1810">@tunglt1810</a>.</li>
-        <li><strong>License</strong>: Licensed under the OSI-approved <strong>GPL-2.0-only</strong> license with no proprietary components.</li>
+        <li data-i18n="csL1"><strong>Open</strong>: The source is on <a href="https://github.com/tunglt1810/safe-your-eyes">GitHub</a>. GitHub builds every download from it, and each one is scanned on VirusTotal.</li>
+        <li data-i18n="csL2"><strong>Maintainer</strong>: <a href="https://github.com/tunglt1810">@tunglt1810</a> writes, reviews and approves every change.</li>
+        <li data-i18n="csL3"><strong>License</strong>: Open source under <strong>GPL-2.0-only</strong>.</li>
       </ul>
     </section>
 
     <section class="section" id="privacy-policy">
-      <h2>Privacy Policy</h2>
-      <p>
+      <h2 data-i18n="pvH">Privacy Policy</h2>
+      <p data-i18n="pvP">
         This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
       </p>
     </section>
@@ -340,27 +401,141 @@
     <section class="section" id="support">
       <div class="support-row">
         <div class="support-copy">
-          <h2>Support</h2>
-          <p>
-            I make Safe Your Eyes in my free time with Rust, Native Shell (<code>nsh</code>) and my
-            <a href="https://github.com/tunglt1810/cozy">Cozy Design System</a>. If it saves your eyes, a coffee keeps me going.
+          <h2 data-i18n="spH">Support</h2>
+          <p data-i18n="spP">
+            I build this in my free time, running mostly on coffee. If it saved your eyes, refill the tank.
           </p>
           <a class="btn btn-primary" href="https://buymeacoffee.com/bbeeezzzzz">Buy Me a Coffee</a>
         </div>
         <a class="qr-card" href="https://buymeacoffee.com/bbeeezzzzz" title="Scan to Buy Me a Coffee">
-          <img src="assets/bmc-qr.svg" alt="QR code for Buy Me a Coffee">
-          <span>Scan to Buy Me a Coffee</span>
+          <img src="assets/bmc-qr.svg" alt="QR code for Buy Me a Coffee" width="140" height="140" loading="lazy">
+          <span data-i18n="qr">Scan to fund my next coffee</span>
         </a>
       </div>
     </section>
 
     <footer>
-      <p>
+      <p data-i18n="foot">
         Made by <a href="https://github.com/tunglt1810">@tunglt1810</a> · GPL-2.0-only ·
         <a href="https://github.com/tunglt1810/safe-your-eyes">GitHub</a> ·
         <a href="https://buymeacoffee.com/bbeeezzzzz">Buy Me a Coffee</a>
       </p>
     </footer>
   </main>
+  <script>
+    const VI = {
+      lead: 'AI code giùm, còn bạn thì quên chớp mắt. App này thỉnh thoảng vỗ vai bắt bạn nhắm mắt một chút, rồi trả bạn về với deadline.',
+      star: 'Tặng sao trên GitHub',
+      latest: 'Bản mới nhất:',
+      download: 'Tải về',
+      downloadFor: 'Tải cho',
+      c1h: 'Nghỉ xíu, không drama',
+      c1p: '15 phút nghỉ 15 giây, 75 phút nghỉ hẳn một phút. Có báo trước, lại khóa phím 2 giây để ngón tay khỏi bấm bỏ qua theo quán tính.',
+      c2h: 'Không nhắc sai lúc',
+      c2p: 'Bạn rời máy là nó ngừng đếm. Đang xem phim toàn màn hình hay máy đang chạy pin thì nó nhịn, để sau hẵng nhắc.',
+      c3h: 'Nhẹ như không',
+      c3p: 'Máy gần như không biết có nó. Tới giờ nghỉ nó mới ló mặt.',
+      c4h: 'Khỏi xin quyền admin',
+      c4p: 'Cài vào tài khoản của bạn là chạy. Khỏi nhờ IT.',
+      setH: 'Cài đặt',
+      setP: 'Muốn nghỉ lâu hơn hay thưa hơn thì chỉnh ở đây. Giao diện tự đổi sáng, tối theo máy của bạn.',
+      csH: 'Chữ ký số',
+      csP: 'Bản cài được ký số miễn phí bởi <a href="https://signpath.io/">SignPath.io</a>, chứng chỉ của <a href="https://signpath.org/">SignPath Foundation</a>. Nhờ vậy máy bạn biết file này chưa bị ai táy máy.',
+      csL1: '<strong>Công khai</strong>: Mã nguồn trên <a href="https://github.com/tunglt1810/safe-your-eyes">GitHub</a>. Bản tải về do GitHub tự đóng gói và đã quét virus trên VirusTotal.',
+      csL2: '<strong>Người phụ trách</strong>: <a href="https://github.com/tunglt1810">@tunglt1810</a>.',
+      csL3: '<strong>Giấy phép</strong>: Mã nguồn mở <strong>GPL-2.0-only</strong>.',
+      pvH: 'Quyền riêng tư',
+      pvP: 'App không gửi dữ liệu của bạn đi đâu, trừ khi bạn yêu cầu.',
+      spH: 'Ủng hộ',
+      spP: 'Mình làm app lúc rảnh, chạy bằng cà phê là chính. Nếu nó cứu được đôi mắt bạn, tiếp nhiên liệu cho mình nhé.',
+      qr: 'Quét mã, tiếp cà phê',
+      foot: 'Làm bởi <a href="https://github.com/tunglt1810">@tunglt1810</a> · GPL-2.0-only · <a href="https://github.com/tunglt1810/safe-your-eyes">GitHub</a> · <a href="https://buymeacoffee.com/bbeeezzzzz">Buy Me a Coffee</a>',
+    };
+    const EN = { download: 'Download', downloadFor: 'Download for' };
+    document.querySelectorAll('[data-i18n]').forEach((el) => { EN[el.dataset.i18n] = el.innerHTML; });
+    let lang = 'en';
+    let platformName = null;
+    const t = (key) => (lang === 'vi' ? VI : EN)[key];
+    const renderDownload = () => {
+      document.getElementById('download-label').textContent = platformName ? t('downloadFor') + ' ' + platformName : t('download');
+    };
+    const setLang = (next) => {
+      lang = next;
+      document.documentElement.lang = lang;
+      document.querySelectorAll('[data-i18n]').forEach((el) => { el.innerHTML = t(el.dataset.i18n); });
+      document.querySelectorAll('.lang-switch button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.lang === lang));
+      renderDownload();
+    };
+    const detectLang = () => {
+      const saved = localStorage.getItem('lang');
+      if (saved === 'en' || saved === 'vi') return saved;
+      if (navigator.languages.some((l) => l.toLowerCase().startsWith('vi'))) return 'vi';
+      // Time zone stands in for location: it needs no permission prompt and no IP lookup service.
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return zone === 'Asia/Ho_Chi_Minh' || zone === 'Asia/Saigon' ? 'vi' : 'en';
+    };
+    document.querySelectorAll('.lang-switch button').forEach((b) => b.addEventListener('click', () => {
+      localStorage.setItem('lang', b.dataset.lang);
+      setLang(b.dataset.lang);
+    }));
+    setLang(detectLang());
+
+    if (matchMedia('(prefers-reduced-motion: no-preference)').matches) {
+      const observer = new IntersectionObserver((entries) => {
+        for (const { target, isIntersecting } of entries) {
+          if (isIntersecting) target.play().catch(() => {});
+          else target.pause();
+        }
+      });
+      document.querySelectorAll('.media-frame video').forEach((v) => observer.observe(v));
+    }
+    (async () => {
+      const btn = document.getElementById('download');
+      fetch('https://api.github.com/repos/tunglt1810/safe-your-eyes')
+        .then((r) => r.ok ? r.json() : Promise.reject())
+        .then((repo) => {
+          const count = document.getElementById('star-count');
+          count.textContent = '★ ' + repo.stargazers_count.toLocaleString('en');
+          count.hidden = false;
+        })
+        .catch(() => {});
+      fetch('https://api.github.com/repos/tunglt1810/safe-your-eyes/releases/latest')
+        .then((r) => r.ok ? r.json() : Promise.reject())
+        .then((release) => {
+          const link = document.getElementById('version-link');
+          link.textContent = release.tag_name;
+          link.href = release.html_url;
+          document.getElementById('version').hidden = false;
+        })
+        .catch(() => {});
+      const ua = navigator.userAgent;
+      const os = /Windows/.test(ua) ? 'windows'
+        : /Android|iPhone|iPad/.test(ua) ? null
+        : /Mac/.test(ua) ? 'macos'
+        : /Linux/.test(ua) ? 'linux' : null;
+      if (!os) return;
+      let arm = /arm|aarch64/i.test(ua);
+      try {
+        const { architecture } = await navigator.userAgentData.getHighEntropyValues(['architecture']);
+        if (architecture) arm = architecture === 'arm';
+      } catch {
+        // Safari reports every Mac as Intel, and most Macs in use now are Apple Silicon.
+        if (os === 'macos') arm = true;
+      }
+      const files = {
+        windows: arm ? 'safe-your-eyes-windows-arm64.exe' : 'safe-your-eyes-windows-x86_64.exe',
+        macos: arm ? 'safe-your-eyes-macos-arm64.zip' : 'safe-your-eyes-macos-x86_64.zip',
+        linux: arm ? 'safe-your-eyes-linux-aarch64' : 'safe-your-eyes-linux-x86_64',
+      };
+      const names = {
+        windows: arm ? 'Windows (ARM64)' : 'Windows (x64)',
+        macos: arm ? 'macOS (Apple Silicon)' : 'macOS (Intel)',
+        linux: arm ? 'Linux (ARM64)' : 'Linux (x64)',
+      };
+      btn.href = 'https://github.com/tunglt1810/safe-your-eyes/releases/latest/download/' + files[os];
+      platformName = names[os];
+      renderDownload();
+    })();
+  </script>
 </body>
 </html>
