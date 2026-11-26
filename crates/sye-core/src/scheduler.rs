@@ -81,15 +81,25 @@ pub enum SchedulerEvent {
     Start,
     Tick,
     Enable,
-    Disable { duration_secs: Option<u64> },
+    Disable {
+        duration_secs: Option<u64>,
+    },
     EnterResting,
-    ExitResting { credit_idle_secs: Option<u64> },
+    ExitResting {
+        credit_idle_secs: Option<u64>,
+    },
     IdleObserved(Duration),
-    TakeBreak { kind: Option<BreakType> },
+    TakeBreak {
+        kind: Option<BreakType>,
+    },
     OverlayFinished(OverlayOutcome),
-    DeferBreak { delay_secs: u64 },
+    DeferBreak {
+        delay_secs: u64,
+    },
     CancelCurrentBreak,
     ReloadConfig(Config),
+    /// Starts the current wait again from its full interval (only in `Waiting`).
+    RestartCountdown,
     Quit,
 }
 
@@ -127,6 +137,7 @@ pub struct Scheduler<C: Clock> {
     // Active monotonic deadlines in milliseconds.
     pre_break_at_ms: u64,
     next_break_at_ms: u64,
+    countdown_started_ms: u64,
     break_started_ms: u64,
     break_ends_ms: u64,
     resume_at_ms: Option<u64>,
@@ -155,6 +166,7 @@ impl<C: Clock> Scheduler<C> {
             last_pre_break_notified_secs: None,
             pre_break_at_ms: 0,
             next_break_at_ms: 0,
+            countdown_started_ms: 0,
             break_started_ms: 0,
             break_ends_ms: 0,
             resume_at_ms: None,
@@ -313,7 +325,7 @@ impl<C: Clock> Scheduler<C> {
             SchedulerEvent::Start | SchedulerEvent::Enable => self.handle_start_or_enable(),
             SchedulerEvent::Tick => self.tick_with_policies(None, None),
             SchedulerEvent::Disable { duration_secs } => self.handle_disable(duration_secs),
-            SchedulerEvent::EnterResting => self.handle_enter_resting(),
+            SchedulerEvent::EnterResting => self.handle_enter_resting(0),
             SchedulerEvent::ExitResting { credit_idle_secs } => {
                 self.handle_exit_resting(credit_idle_secs)
             }
@@ -323,6 +335,13 @@ impl<C: Clock> Scheduler<C> {
             SchedulerEvent::DeferBreak { delay_secs } => self.handle_defer_break(delay_secs),
             SchedulerEvent::CancelCurrentBreak => self.handle_cancel_current_break(),
             SchedulerEvent::ReloadConfig(new_cfg) => self.handle_reload_config(new_cfg),
+            SchedulerEvent::RestartCountdown => {
+                if self.state == SchedulerState::Waiting {
+                    self.enter_waiting_fresh()
+                } else {
+                    Vec::new()
+                }
+            }
             SchedulerEvent::Quit => self.handle_quit(),
         }
     }
@@ -544,7 +563,8 @@ impl<C: Clock> Scheduler<C> {
         actions
     }
 
-    fn handle_enter_resting(&mut self) -> Vec<SchedulerAction> {
+    /// `credit_ms` is countdown time to give back on top of what remains.
+    fn handle_enter_resting(&mut self, credit_ms: u64) -> Vec<SchedulerAction> {
         match self.state {
             SchedulerState::Waiting | SchedulerState::PreBreak | SchedulerState::Break => {}
             SchedulerState::Start
@@ -556,7 +576,9 @@ impl<C: Clock> Scheduler<C> {
         let mut actions = Vec::new();
         let now_mono = self.now_mono_ms();
         self.remaining_until_break_ms = if self.state == SchedulerState::Waiting {
-            self.next_break_at_ms.saturating_sub(now_mono)
+            self.next_break_at_ms
+                .saturating_sub(now_mono)
+                .saturating_add(credit_ms)
         } else {
             0
         };
@@ -605,6 +627,7 @@ impl<C: Clock> Scheduler<C> {
         {
             let remaining_ms = self.remaining_until_break_ms;
             self.state = SchedulerState::Waiting;
+            self.countdown_started_ms = now_mono;
             self.next_break_at_ms = now_mono.saturating_add(remaining_ms);
             let warning_ms = self
                 .config
@@ -629,7 +652,11 @@ impl<C: Clock> Scheduler<C> {
         );
         match decision {
             SmartPauseDecision::None => Vec::new(),
-            SmartPauseDecision::PauseResting => self.handle_enter_resting(),
+            SmartPauseDecision::PauseResting => {
+                // The countdown ran while the user was idle before the threshold was reached.
+                let counted_ms = self.now_mono_ms().saturating_sub(self.countdown_started_ms);
+                self.handle_enter_resting(duration_to_ms_u64(current_idle).min(counted_ms))
+            }
             SmartPauseDecision::ResumeCreditBack { credit } => {
                 self.handle_exit_resting(Some(credit.as_secs()))
             }
@@ -863,6 +890,7 @@ impl<C: Clock> Scheduler<C> {
         self.last_pre_break_notified_secs = None;
         self.next_break_at_ms = now.saturating_add(wait_ms);
         self.pre_break_at_ms = self.next_break_at_ms.saturating_sub(warning_ms);
+        self.countdown_started_ms = now;
 
         let mut actions = vec![SchedulerAction::UpdateTray(self.tray_snapshot())];
         if persist && self.config.persist_state {
@@ -1405,7 +1433,59 @@ mod tests {
         clock.advance_secs(20);
         let _ = sched.handle_event(SchedulerEvent::IdleObserved(Duration::ZERO));
         assert_eq!(sched.state(), SchedulerState::Waiting);
-        assert_eq!(sched.status_snapshot().seconds_until_next_break, 600);
+        // The 300s of idle before the pause count back too.
+        assert_eq!(sched.status_snapshot().seconds_until_next_break, 900);
+    }
+
+    #[test]
+    fn smart_pause_credits_idle_before_the_pause() {
+        let clock = FakeClock::default();
+        let mut sched = Scheduler::new(test_config(), &clock, 1);
+        let _ = sched.handle_event(SchedulerEvent::Start);
+
+        clock.advance_secs(400); // 500s remaining, the last 300s idle
+        let _ = sched.handle_event(SchedulerEvent::IdleObserved(Duration::from_secs(300)));
+        assert_eq!(sched.state(), SchedulerState::Resting);
+        assert_eq!(sched.status_snapshot().seconds_until_next_break, 800);
+
+        clock.advance_secs(60);
+        let _ = sched.handle_event(SchedulerEvent::IdleObserved(Duration::ZERO));
+        assert_eq!(sched.state(), SchedulerState::Waiting);
+        assert_eq!(sched.status_snapshot().seconds_until_next_break, 800);
+    }
+
+    #[test]
+    fn smart_pause_credit_never_exceeds_the_countdown_elapsed() {
+        let clock = FakeClock::default();
+        let mut sched = Scheduler::new(test_config(), &clock, 1);
+        let _ = sched.handle_event(SchedulerEvent::Start);
+
+        // Idle began before this countdown started: only its 100s count back.
+        clock.advance_secs(100);
+        let _ = sched.handle_event(SchedulerEvent::IdleObserved(Duration::from_secs(300)));
+        clock.advance_secs(30);
+        let _ = sched.handle_event(SchedulerEvent::IdleObserved(Duration::ZERO));
+        assert_eq!(sched.status_snapshot().seconds_until_next_break, 900);
+    }
+
+    #[test]
+    fn restart_countdown_restarts_only_while_waiting() {
+        let clock = FakeClock::default();
+        let mut sched = Scheduler::new(test_config(), &clock, 1);
+        let _ = sched.handle_event(SchedulerEvent::Start);
+
+        clock.advance_secs(180);
+        assert_eq!(sched.status_snapshot().seconds_until_next_break, 720);
+        let _ = sched.handle_event(SchedulerEvent::RestartCountdown);
+        assert_eq!(sched.status_snapshot().seconds_until_next_break, 900);
+
+        let _ = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
+        assert!(
+            sched
+                .handle_event(SchedulerEvent::RestartCountdown)
+                .is_empty()
+        );
+        assert_eq!(sched.state(), SchedulerState::Break);
     }
 
     #[test]

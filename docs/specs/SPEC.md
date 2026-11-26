@@ -137,7 +137,7 @@ Every event handler runs synchronously and returns a list of `SchedulerAction` v
 
 1. In `Waiting`, when OS idle time reaches `idle_threshold_secs` (default 300 seconds), `SmartPausePolicy` returns `PauseResting`.
 2. When user activity resumes during `Resting`, the policy calculates total idle duration.
-3. When idle duration is less than `short_break_interval_secs`, the policy returns `ResumeCreditBack` to shift the next break forward.
+3. When idle duration is less than `short_break_interval_secs`, the policy returns `ResumeCreditBack` to shift the next break forward. The shift includes the idle time before `Resting` started, up to the time the current countdown ran.
 4. When idle duration is greater than or equal to `short_break_interval_secs`, the policy returns `ResumeResetCycle`.
 5. When `postpone_if_active` is `true` and the user acts during the final 2 seconds before `Break`, `Scheduler` stays in `PreBreak`, dismisses any active pre-break banner once, and defers `Break` by 2 seconds without repeating the pre-break notification or chime.
 
@@ -296,7 +296,7 @@ Global options:
 
 Modes and control flags:
 
-- No control flag: Start the single-instance daemon. When the user omits `--headless` and `--background` and macOS did not launch the process as a Login Item (`keyAELaunchedAsLogInItem`), the daemon opens the Settings window after startup and keeps the system tray active. When the Settings window closes after saving changes, the daemon reloads `config.toml` immediately. If a daemon already listens on `--socket`, the CLI sends `IpcCommand::OpenSettings` (unless `--headless` or `--background` is present), prints `Safe Your Eyes is already running` to stdout, and exits with code 0.
+- No control flag: Start the single-instance daemon. When the user omits `--headless` and `--background` and macOS did not launch the process as a Login Item (`keyAELaunchedAsLogInItem`), the daemon opens the Settings window after startup and keeps the system tray active. When the Settings window closes after saving changes, the daemon reloads `config.toml` immediately. When the Settings window that opened at startup closes while `Scheduler` is still in its first `Waiting`, the daemon starts that countdown again from its full interval. If a daemon already listens on `--socket`, the CLI sends `IpcCommand::OpenSettings` (unless `--headless` or `--background` is present), prints `Safe Your Eyes is already running` to stdout, and exits with code 0.
 - `--status`: Print human-readable daemon status to stdout and exit with code 0. If no daemon is running, print `Safe Your Eyes is not running` to stderr and exit with code 1.
 - `--status --json`: Print JSON with `state`, `enabled`, `next_break_type`, `next_break_name`, `seconds_until_next_break`, and `consecutive_skips`.
 - `-e`, `--enable`: Resume the running daemon.

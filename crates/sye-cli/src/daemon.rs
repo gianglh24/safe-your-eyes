@@ -282,8 +282,12 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
     let launched_at_login = app_loop
         .as_ref()
         .is_some_and(PlatformEventLoop::was_launched_as_login_item);
-    if should_open_settings_on_startup(headless, background, launched_at_login) {
+    // The first countdown starts when the Settings window that opens at startup closes.
+    let mut restart_on_settings_close =
+        should_open_settings_on_startup(headless, background, launched_at_login);
+    if restart_on_settings_close {
         host.open_settings();
+        restart_on_settings_close = host.settings_child.is_some();
     }
 
     loop {
@@ -293,7 +297,11 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
             break;
         }
 
-        if host.take_settings_exited()
+        if restart_on_settings_close && scheduler.state() != SchedulerState::Waiting {
+            restart_on_settings_close = false;
+        }
+        let settings_exited = host.take_settings_exited();
+        if settings_exited
             && let Ok(updated_cfg) = Config::load_from_path(&paths.config_file)
             && updated_cfg != *scheduler.config()
         {
@@ -307,6 +315,9 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
                 eprintln!("Warning: failed to synchronize autostart entry: {err}");
             }
             host.execute(scheduler.handle_event(SchedulerEvent::ReloadConfig(updated_cfg)));
+        }
+        if settings_exited && std::mem::take(&mut restart_on_settings_close) {
+            host.execute(scheduler.handle_event(SchedulerEvent::RestartCountdown));
         }
 
         if let Some(outcome) = host.poll_overlay_outcome() {
