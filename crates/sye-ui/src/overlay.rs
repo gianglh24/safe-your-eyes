@@ -271,6 +271,8 @@ fn overlay_main_window_options_for_primary(
     // Explorer lowers the taskbar only for a full-screen window that has a taskbar button.
     attrs.taskbar = Some(cfg!(target_os = "windows"));
     attrs.shadow = Some(false);
+    // An opaque window fades from its clear color (white or near black), not from the desktop.
+    attrs.transparent = Some(true);
 
     let mut main_window = MainWindowOptions::default();
     if let Some(rect) = primary {
@@ -325,12 +327,72 @@ fn secondary_window_attributes() -> WindowAttributes {
     attrs.taskbar = Some(false);
     attrs.shadow = Some(false);
     attrs.activate = Some(false);
+    attrs.transparent = Some(true);
     attrs.focusable = Some(false);
     attrs
 }
 
+const PROGRESS_TRACK_W: f32 = 360.0;
+
+/// Values of one window's entrance. Each window has its own: the engine animates per surface.
+#[derive(Clone, Copy)]
+struct Entrance {
+    fade: AnimatedValue,
+    card_scale: AnimatedValue,
+    progress_x: AnimatedValue,
+}
+
+impl Entrance {
+    fn new(vm: Signal<OverlayViewModel>) -> Self {
+        let (alpha, progress) = vm.with(|m| (m.fade_in_alpha(), m.progress()));
+        Self {
+            fade: animated_value(alpha),
+            card_scale: animated_value(if reduce_motion() { 1.0 } else { 0.98 }),
+            progress_x: animated_value(progress_offset(progress)),
+        }
+    }
+
+    /// Starts the animations once the window is on screen. The engine clocks an animation from
+    /// its first frame, and frames drawn before the window is shown and sized are lost.
+    fn play(&self, vm: Signal<OverlayViewModel>) {
+        let (alpha, fade_ms, progress, remaining) = vm.with(|m| {
+            (
+                m.fade_in_alpha(),
+                m.request.fade_in_ms,
+                m.progress(),
+                m.remaining(),
+            )
+        });
+        if alpha < 1.0 {
+            let _ = self
+                .fade
+                .timing(1.0, fade_ms as f32 * (1.0 - alpha), Easing::Linear);
+        }
+        if !reduce_motion() {
+            let _ = self.card_scale.timing(
+                1.0,
+                crate::theme::motion::THEME_COLOR_MS,
+                crate::theme::motion::COZY_EASE,
+            );
+        }
+        // One animation for the whole break: width does not animate per frame, and a
+        // transition restarted at each tick stutters.
+        self.progress_x.set(progress_offset(progress));
+        if progress < 1.0 {
+            let _ = self
+                .progress_x
+                .timing(0.0, remaining.as_secs_f32() * 1000.0, Easing::Linear);
+        }
+    }
+}
+
+fn progress_offset(progress: f32) -> f32 {
+    -(1.0 - progress) * PROGRESS_TRACK_W
+}
+
 fn build_overlay_card(
     vm: Signal<OverlayViewModel>,
+    entrance: &Entrance,
     finish_if_ready: impl Fn() + Clone + 'static,
 ) -> impl IntoElement {
     let break_label: &'static str = vm.with(|m| match m.request().break_type {
@@ -409,15 +471,6 @@ fn build_overlay_card(
         );
     }
 
-    let card_scale = animated_value(if reduce_motion() { 1.0 } else { 0.98 });
-    if !reduce_motion() {
-        card_scale.timing(
-            1.0,
-            crate::theme::motion::THEME_COLOR_MS,
-            crate::theme::motion::COZY_EASE,
-        );
-    }
-
     let mut card = view()
         .w(px(560.0))
         .max_w(percentage(0.9))
@@ -428,7 +481,7 @@ fn build_overlay_card(
         .p_8()
         .gap_5()
         .items_center()
-        .bind_scale(&card_scale)
+        .bind_scale(&entrance.card_scale)
         .child(app_icon(48.0))
         .child(
             view()
@@ -457,21 +510,18 @@ fn build_overlay_card(
         )
         .child(
             view()
-                .w(px(360.0))
-                .max_w(percentage(1.0))
+                .w(px(PROGRESS_TRACK_W))
                 .h(px(8.0))
                 .rounded(radii::PILL)
                 .bg(colors::OVERLAY_TRACK)
+                .overflow_hidden()
                 .child(
                     view()
+                        .w(px(PROGRESS_TRACK_W))
                         .h(px(8.0))
                         .rounded(radii::PILL)
                         .bg(colors::ACCENT)
-                        .transition_all()
-                        // Same as the tick interval: a longer one restarts mid-way every tick and stutters.
-                        .duration(100.0)
-                        .ease_linear()
-                        .w(move || percentage(vm.with(OverlayViewModel::progress))),
+                        .bind_translate_x(&entrance.progress_x),
                 ),
         );
 
@@ -503,16 +553,6 @@ fn build_overlay_card(
 }
 
 /// Builds the Cozy break overlay surface for both desktop runs and headless tests.
-/// The 100 ms tick only steps the fade 10 times a second; the engine animates it per frame.
-fn fade_in_value(vm: Signal<OverlayViewModel>) -> AnimatedValue {
-    let (alpha, fade_ms) = vm.with(|m| (m.fade_in_alpha(), m.request.fade_in_ms));
-    let value = animated_value(alpha);
-    if alpha < 1.0 {
-        let _ = value.timing(1.0, fade_ms as f32 * (1.0 - alpha), Easing::Linear);
-    }
-    value
-}
-
 pub(crate) fn build_overlay_view(
     request: OverlayRequest,
     outcome_sink: Arc<Mutex<Option<OverlayOutcome>>>,
@@ -538,9 +578,12 @@ pub(crate) fn build_overlay_view(
 
     // Drive fade-in and countdown ticks on the NSH engine clock (supports Clock::manual in tests).
     let finish_tick = finish_if_ready.clone();
+    // Late wakes skip runs, so a fixed step per run falls behind the progress animation.
+    let started = nsh_core::time::now();
     let _timer = set_interval(Duration::from_millis(100), move || {
+        let elapsed = nsh_core::time::now().saturating_duration_since(started);
         vm.update(|m| {
-            let _ = m.tick(Duration::from_millis(100));
+            let _ = m.update_elapsed(elapsed);
         });
         finish_tick();
     });
@@ -561,14 +604,15 @@ pub(crate) fn build_overlay_view(
         finish_space();
     });
 
+    let entrance = Entrance::new(vm);
     let mut root = view()
         .flex_1()
         .bg(colors::OVERLAY_CANVAS)
         .items_center()
         .justify_center()
         .p_6()
-        .bind_opacity(&fade_in_value(vm))
-        .child(build_overlay_card(vm, finish_if_ready.clone()));
+        .bind_opacity(&entrance.fade)
+        .child(build_overlay_card(vm, &entrance, finish_if_ready.clone()));
 
     if quit_on_finish {
         let main_win = current_window();
@@ -604,6 +648,7 @@ pub(crate) fn build_overlay_view(
                 }
             }
             focus_win.focus();
+            entrance.play(vm);
             if let Some(hook) = on_shown {
                 hook();
             }
@@ -638,6 +683,9 @@ pub(crate) fn build_overlay_view(
                 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
                 let sec_win_el = sec_win_el.default_mode(nsh_core::desktop::WindowMode::FullScreen);
                 sec_win_el.content(move || {
+                    let entrance = Entrance::new(vm);
+                    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                    entrance.play(vm);
                     #[cfg(any(target_os = "macos", target_os = "windows"))]
                     {
                         let sec_win = current_window();
@@ -649,6 +697,7 @@ pub(crate) fn build_overlay_view(
                         });
                         drop(set_timeout(Duration::from_millis(16), move || {
                             apply_bounds(d.with(|disp| disp.bounds));
+                            entrance.play(vm);
                         }));
                     }
                     view()
@@ -657,11 +706,13 @@ pub(crate) fn build_overlay_view(
                         .items_center()
                         .justify_center()
                         .p_6()
-                        .bind_opacity(&fade_in_value(vm))
-                        .child(build_overlay_card(vm, finish_if_ready.clone()))
+                        .bind_opacity(&entrance.fade)
+                        .child(build_overlay_card(vm, &entrance, finish_if_ready.clone()))
                 })
             },
         ));
+    } else {
+        entrance.play(vm);
     }
 
     root
@@ -933,6 +984,13 @@ mod tests {
     }
 
     #[test]
+    fn progress_offset_slides_the_fill_from_hidden_to_full() {
+        assert_eq!(progress_offset(0.0), -PROGRESS_TRACK_W);
+        assert_eq!(progress_offset(0.25), -0.75 * PROGRESS_TRACK_W);
+        assert_eq!(progress_offset(1.0), 0.0);
+    }
+
+    #[test]
     fn status_note_trims_and_ignores_blank() {
         let vm = OverlayViewModel::new(sample_request());
         assert_eq!(vm.status_note(), Some("Take a deep breath"));
@@ -1001,6 +1059,7 @@ mod tests {
         assert_eq!(opts.attributes.close_on_press, Some(false));
         assert_eq!(opts.attributes.taskbar, Some(cfg!(target_os = "windows")));
         assert_eq!(opts.attributes.shadow, Some(false));
+        assert_eq!(opts.attributes.transparent, Some(true));
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         assert_eq!(
             opts.default_mode,
@@ -1041,5 +1100,6 @@ mod tests {
         assert_eq!(sec.shadow, Some(false));
         assert_eq!(sec.activate, Some(false));
         assert_eq!(sec.focusable, Some(false));
+        assert_eq!(sec.transparent, Some(true));
     }
 }
