@@ -297,14 +297,10 @@ impl DaemonHost<'_> {
         std::mem::take(&mut self.settings_exited)
     }
 
-    fn close_settings(&mut self, saved_autostart: bool) {
+    fn close_settings(&mut self) {
         if let Some(mut child) = self.settings_child.take() {
             let _ = child.kill();
             let _ = child.wait();
-            if !self.headless {
-                let _ =
-                    sye_platform::sync_system_autostart(saved_autostart, Some(self.config_file));
-            }
         }
     }
 
@@ -313,6 +309,10 @@ impl DaemonHost<'_> {
             let _ = launcher.close();
         }
     }
+}
+
+fn config_modified_at(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 fn disable_minutes_to_secs(minutes: Option<u64>) -> Option<u64> {
@@ -434,6 +434,8 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
     host.sync_tray_update();
 
     let mut last_policy_check = Instant::now();
+    let mut last_config_poll = Instant::now();
+    let mut config_mtime = config_modified_at(&paths.config_file);
     let mut update_check_rx: Option<mpsc::Receiver<Option<UpdateInfo>>> = None;
     let mut next_update_check_at = compute_next_update_check(&cached_update);
     let mut restart_after_exit = false;
@@ -471,10 +473,20 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
             restart_on_settings_close = false;
         }
         let settings_exited = host.take_settings_exited();
+        let mut config_changed = false;
         if settings_exited {
             host.reload_cached_update();
         }
         if settings_exited
+            || (host.settings_child.is_some()
+                && last_config_poll.elapsed() >= Duration::from_secs(1))
+        {
+            last_config_poll = Instant::now();
+            let mtime = config_modified_at(&paths.config_file);
+            config_changed = mtime != config_mtime;
+            config_mtime = mtime;
+        }
+        if (settings_exited || config_changed)
             && let Ok(updated_cfg) = Config::load_from_path(&paths.config_file)
             && updated_cfg != *scheduler.config()
         {
@@ -577,7 +589,7 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
     }
 
     host.close_overlay();
-    host.close_settings(scheduler.config().autostart);
+    host.close_settings();
     drop(host);
     drop(server);
     if restart_after_exit && let Err(err) = spawn_restarted_daemon(paths, headless) {
