@@ -20,8 +20,6 @@ pub fn hide_child_console(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
-/// Tells the taskbar that this process's visible top-level windows are full screen, so it stays
-/// below them.
 pub fn mark_own_windows_fullscreen() {
     #[cfg(target_os = "windows")]
     {

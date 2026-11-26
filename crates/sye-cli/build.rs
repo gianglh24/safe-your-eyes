@@ -1,5 +1,3 @@
-//! Embeds the multi-resolution Windows `.ico` resource into `safe-your-eyes.exe`.
-
 fn main() {
     #[cfg(windows)]
     if let Err(err) = embed_windows_icon() {

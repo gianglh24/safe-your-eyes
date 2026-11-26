@@ -1,5 +1,3 @@
-//! Platform adapter trait boundaries and deterministic `FakeClock` helper.
-
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -8,7 +6,6 @@ use crate::config::BreakType;
 use crate::policies::DndContext;
 use crate::scheduler::{OverlayOutcome, OverlayRequest};
 
-/// Error returned by platform adapter implementations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlatformError {
     Unsupported,
@@ -28,16 +25,12 @@ impl fmt::Display for PlatformError {
 
 impl std::error::Error for PlatformError {}
 
-/// Time source injected into `Scheduler` for deterministic testing and suspend handling.
 pub trait Clock {
-    /// Monotonic duration since an arbitrary fixed epoch (never decreases).
     fn now_monotonic(&self) -> Duration;
 
-    /// Wall-clock duration since Unix epoch (advances across OS suspend/sleep).
     fn now_wall_unix(&self) -> Duration;
 }
 
-/// Thread-safe deterministic clock for tests and simulations.
 #[derive(Debug)]
 pub struct FakeClock {
     mono_ms: AtomicU64,
@@ -45,7 +38,6 @@ pub struct FakeClock {
 }
 
 impl FakeClock {
-    /// Creates a `FakeClock` initialized at the given monotonic and wall-clock durations.
     #[must_use]
     pub fn new(mono: Duration, wall_unix: Duration) -> Self {
         Self {
@@ -54,24 +46,20 @@ impl FakeClock {
         }
     }
 
-    /// Advances both monotonic and wall clocks by `delta`.
     pub fn advance(&self, delta: Duration) {
         let delta_ms = duration_to_ms_u64(delta);
         self.advance_mono_ms(delta_ms);
         self.advance_wall_ms(delta_ms);
     }
 
-    /// Advances both monotonic and wall clocks by `secs` seconds.
     pub fn advance_secs(&self, secs: u64) {
         self.advance(Duration::from_secs(secs));
     }
 
-    /// Advances only the wall clock (simulating OS suspend where monotonic time freezes).
     pub fn advance_wall_only(&self, delta: Duration) {
         self.advance_wall_ms(duration_to_ms_u64(delta));
     }
 
-    /// Sets the wall clock directly (useful for testing backward NTP jumps).
     pub fn set_wall_unix(&self, wall_unix: Duration) {
         self.wall_ms
             .store(duration_to_ms_u64(wall_unix), Ordering::SeqCst);
@@ -127,17 +115,14 @@ pub(crate) fn duration_to_ms_u64(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// Provides OS user input idle duration.
 pub trait IdleProvider {
     fn idle_duration(&self) -> Result<Duration, PlatformError>;
 }
 
-/// Queries OS window, fullscreen, battery, and inhibit context for `DoNotDisturb`.
 pub trait DndProvider {
     fn query_dnd_context(&self) -> Result<DndContext, PlatformError>;
 }
 
-/// Displays and dismisses desktop pre-break notifications.
 pub trait Notifier {
     fn show_pre_break(
         &self,
@@ -148,12 +133,10 @@ pub trait Notifier {
     fn dismiss(&self) -> Result<(), PlatformError>;
 }
 
-/// Plays synthesized PCM WAV audio bytes without blocking the scheduler loop.
 pub trait AudioPlayer {
     fn play_wav(&self, wav_bytes: &[u8]) -> Result<(), PlatformError>;
 }
 
-/// Launches, polls, and closes the fullscreen break overlay subprocess.
 pub trait OverlayLauncher {
     fn launch(&mut self, request: &OverlayRequest) -> Result<(), PlatformError>;
     fn poll_outcome(&mut self) -> Result<Option<OverlayOutcome>, PlatformError>;

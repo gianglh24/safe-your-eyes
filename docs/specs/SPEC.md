@@ -311,3 +311,59 @@ Modes and control flags:
 - `--print-default-config`: Print the default TOML configuration to stdout and exit with code 0.
 - `--validate-config`: Validate `--config <PATH>` and exit with code 0 when valid or code 1 on error.
 - `--internal-overlay <JSON_PAYLOAD>` and `--internal-settings --config <PATH>`: Internal subprocess entry points started by the daemon.
+
+## 12. Platform Constraints
+
+This section lists the operating system and framework limits that the code works around. Each item gives the limit and the required behavior.
+
+### 12.1 macOS
+
+1. LaunchServices passes a `-psn_*` argument when it starts an `.app` bundle. The CLI parser ignores it.
+2. `tray-icon` needs an active `NSApplication` event loop on the main thread. The daemon creates `PlatformEventLoop` before `TrayHandle`.
+3. At launch, AppKit sends the `'aevt'/'oapp'` AppleEvent and calls `applicationDidFinishLaunching:` only while the event loop runs. `PlatformEventLoop::new` pumps events until this occurs.
+4. A logout or restart asks `applicationShouldTerminate:`. The delegate returns `TerminateLater`, and the daemon replies after its cleanup. This keeps the logout or restart going.
+5. AppKit can keep a reference to a delegate that is gone. `PlatformEventLoop` removes the delegate from `NSApplication` before it releases the delegate.
+6. While the status bar menu is open, AppKit runs `NSEventTrackingRunLoopMode` and the daemon loop stops. `TrayHandle` updates the countdown from a timer in that mode.
+7. Menu tracking blocks the daemon loop, so `poll` does not see the click that opened the menu. `TrayHandle` records the menu open from the `NSMenuDidBeginTrackingNotification` observer.
+8. The break overlay covers the menu bar at a lower window level than the tray tooltip window. `TrayHandle` does not show the tooltip during `Break`.
+9. On macOS 26 and later, borderless windows with the `Default` animation behavior bounce when they appear. The tooltip window uses `NSWindowAnimationBehavior::None`.
+10. On macOS 27, `NSToolTipManager` can leave the `NSStatusItem` tooltip on screen after sleep and wake or after a fast pointer pass. It also moves the tooltip to the pointer on `setToolTip:`. `TrayHandle` does not set a native tooltip on macOS.
+11. `UNUserNotificationCenter` shows a new animated banner for each countdown update, and temporary banners hide after about 5 seconds. `OsNotifier` uses its own `NSPanel` banner instead.
+12. A panel that is released inside its own `mouseDown:` handler frees the object that runs the handler. The banner hides first and releases the panel later. The banner accepts the first mouse click, so one click dismisses it while another app is active.
+13. `NSApplication::activate()` has no effect after the tray menu closes. The Settings window requests `Activation::Take` at first display and again after AppKit ends menu tracking.
+14. The Settings window passes the saved theme to `Root`, not to `AppOptions`. This keeps the real system color scheme available for the System theme.
+15. A native titled window without `NSToolbar` has a 16pt corner radius. The Cozy radius scale and the 8pt outer Settings padding use this value.
+16. `launchd` can stop the process when `launchctl` removes a running job. `sye-platform` deletes the legacy plist before it runs `launchctl`.
+17. A LaunchAgent plist without `AssociatedBundleIdentifiers` shows no app icon in System Settings. The fallback plist sets this key to the bundle identifier.
+18. `SMAppService` reports `RequiresApproval` and `NotFound` while the user has not approved the Login Item. For these states, the daemon uses `config.toml` and does not unregister the item.
+19. Homebrew Cask installs a symbolic link to the executable. The overlay launcher resolves the link so that macOS starts the executable inside the `.app` bundle.
+20. `UnixListener::bind` sets `FD_CLOEXEC` after `socket()`. A child process that starts at the same time can keep the socket open. The IPC tests retry the bind.
+
+### 12.2 Windows
+
+1. The daemon detaches from its console with `FreeConsole`. After that, the inherited standard handles are not valid, and `spawn` fails with them. The daemon starts child processes with null standard input and output.
+2. nsh ends the process inside `run_app`, so `run_overlay_with_hook` does not return. The overlay writes its outcome from the outcome hook.
+3. Explorer moves the taskbar below a window only when the window is full screen, is in the foreground, and has a taskbar button. The overlay window has a taskbar button, and the overlay marks its visible windows full screen with `ITaskbarList2::MarkFullscreenWindow`.
+4. Named pipes return `ErrorKind::Unsupported` for stream timeouts. The IPC code ignores this error.
+5. `GetSysColor` does not follow the app dark mode. In dark mode, the banner uses the Windows 11 flyout colors.
+6. The banner uses per-thread DPI awareness for its Win32 calls. The tray icon keeps the process DPI awareness.
+7. `sye-cli/build.rs` embeds the app icon with resource ID 1 (`winresource::set_icon`). The banner loads the icon with this ID.
+8. Windows 10 does not support rounded window corners from DWM. The banner keeps square corners there.
+9. Native caption buttons occupy the top-right corner on Windows and Linux. The Settings window keeps clear space at the top for window drag.
+
+### 12.3 Linux
+
+1. `org.gnome.SessionManager.IsInhibited` uses flag 8 for an idle inhibit.
+2. The GNOME Mutter `IdleMonitor` returns idle time in milliseconds as `u64`. The Freedesktop `ScreenSaver` fallback returns idle time in milliseconds as `u32`.
+3. The notification server can give a new id to a notification that replaces an expired one. `OsNotifier` stores the id that the server returns.
+4. `handle_action` blocks until the server reports `ActionInvoked` or `NotificationClosed`. `OsNotifier` calls it on a separate thread.
+
+### 12.4 Native Shell (`nsh`)
+
+1. An opaque window fades from its clear color (white, or near black in dark mode), not from the desktop. The overlay windows are transparent.
+2. The engine animates per surface. Each overlay window has its own animated values.
+3. The engine starts the clock of an animation at its first frame. Frames before the window is shown and sized are lost. The overlay starts its animations after its window is shown.
+4. A width change does not animate per frame. The progress bar moves its fill with one `translate_x` animation for the whole break.
+5. `set_interval` skips late runs. The overlay calculates the countdown from the clock, not from the number of ticks.
+6. `Engine::drop` stops the worker thread but does not dispose the root `Owner`. The Settings window uses `on_app_quit` for window close and `cleanup` for scope disposal.
+7. The daemon stops the Settings child with `SIGKILL`, and `SIGKILL` skips `on_app_quit`. The daemon restores the saved autostart value itself.

@@ -1,5 +1,3 @@
-//! Deterministic 7-state break scheduler integrating `BreakQueue` and F4–F9 policies.
-
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -13,7 +11,6 @@ use crate::queue::{BreakQueue, ResolvedBreak};
 use crate::session::{SESSION_SCHEMA_VERSION, SessionState};
 use crate::traits::{Clock, duration_to_ms_u64};
 
-/// Seven deterministic states of `Scheduler`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SchedulerState {
@@ -26,7 +23,6 @@ pub enum SchedulerState {
     Resting,
 }
 
-/// Payload passed to `sye-ui` when displaying a fullscreen break overlay.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OverlayRequest {
     pub break_type: BreakType,
@@ -40,7 +36,6 @@ pub struct OverlayRequest {
     pub status_note: Option<String>,
 }
 
-/// Outcome returned by the break overlay subprocess.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum OverlayOutcome {
@@ -50,7 +45,6 @@ pub enum OverlayOutcome {
     Closed,
 }
 
-/// Snapshot used by `--status --json` and IPC `IpcResponse::Status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusSnapshot {
     pub state: SchedulerState,
@@ -61,7 +55,6 @@ pub struct StatusSnapshot {
     pub consecutive_skips: u32,
 }
 
-/// Snapshot used by `sye-platform` to refresh system tray icon, tooltip, and menu state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraySnapshot {
     pub state: SchedulerState,
@@ -75,7 +68,6 @@ pub struct TraySnapshot {
     pub consecutive_skips: u32,
 }
 
-/// Input events processed synchronously by `Scheduler::handle_event`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchedulerEvent {
     Start,
@@ -94,7 +86,6 @@ pub enum SchedulerEvent {
     Quit,
 }
 
-/// Pure side-effect commands emitted by `Scheduler` for the host loop to execute.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchedulerAction {
     NotifyPreBreak {
@@ -112,7 +103,6 @@ pub enum SchedulerAction {
     PersistSession(SessionState),
 }
 
-/// Pure, deterministic break scheduler parameterized by a `Clock`.
 #[derive(Debug)]
 pub struct Scheduler<C: Clock> {
     config: Config,
@@ -125,7 +115,6 @@ pub struct Scheduler<C: Clock> {
     pre_break_notification_active: bool,
     last_pre_break_notified_secs: Option<u64>,
 
-    // Active monotonic deadlines in milliseconds.
     pre_break_at_ms: u64,
     next_break_at_ms: u64,
     countdown_started_ms: u64,
@@ -134,14 +123,12 @@ pub struct Scheduler<C: Clock> {
     resume_at_ms: Option<u64>,
     disabled_until_unix_secs: Option<u64>,
 
-    // Resting snapshots.
     resting_since_mono_ms: u64,
     resting_since_wall_secs: u64,
     remaining_until_break_ms: u64,
 }
 
 impl<C: Clock> Scheduler<C> {
-    /// Creates a new scheduler in `SchedulerState::Start`.
     #[must_use]
     pub fn new(config: Config, clock: C, rng_seed: u64) -> Self {
         let queue = BreakQueue::from_config(&config, rng_seed);
@@ -168,7 +155,6 @@ impl<C: Clock> Scheduler<C> {
         }
     }
 
-    /// Hydrates queue indices and consecutive-skip count from a persisted `SessionState`.
     pub fn restore_session(&mut self, session: &SessionState) {
         self.skip_limit = SkipLimitPolicy::new(session.consecutive_skips);
         if let Some(queue) = self.queue.as_mut() {
@@ -180,19 +166,16 @@ impl<C: Clock> Scheduler<C> {
         }
     }
 
-    /// Returns the current scheduler state.
     #[must_use]
     pub const fn state(&self) -> SchedulerState {
         self.state
     }
 
-    /// Returns a reference to the active configuration.
     #[must_use]
     pub const fn config(&self) -> &Config {
         &self.config
     }
 
-    /// Returns the next monotonic deadline when `tick()` should be invoked.
     #[must_use]
     pub const fn next_deadline(&self) -> Option<Duration> {
         let ms = match self.state {
@@ -208,7 +191,6 @@ impl<C: Clock> Scheduler<C> {
         }
     }
 
-    /// Returns `true` during the initial `shortcut_disable_secs` lock window of `Break`.
     #[must_use]
     pub fn is_shortcut_locked(&self) -> bool {
         if self.state != SchedulerState::Break {
@@ -220,9 +202,6 @@ impl<C: Clock> Scheduler<C> {
         self.now_mono_ms() < lock_end
     }
 
-    /// Evaluates `DoNotDisturb` and `SmartPause::postpone_if_active` before entering `Break`.
-    ///
-    /// Host loops can call this when `state == PreBreak` right before `Tick` transitions to `Break`.
     #[must_use]
     pub fn evaluate_pre_break_policies(
         &mut self,
@@ -248,7 +227,6 @@ impl<C: Clock> Scheduler<C> {
         Vec::new()
     }
 
-    /// Returns `true` when `Waiting` or `PreBreak` has reached its policy-evaluation deadline.
     #[must_use]
     pub fn needs_policy_check(&self) -> bool {
         match self.state {
@@ -262,7 +240,6 @@ impl<C: Clock> Scheduler<C> {
         }
     }
 
-    /// Advances time-driven transitions while evaluating `DoNotDisturb` and `SmartPause` policies.
     #[must_use]
     pub fn tick_with_policies(
         &mut self,
@@ -299,13 +276,11 @@ impl<C: Clock> Scheduler<C> {
         }
     }
 
-    /// Convenience wrapper for `tick_with_policies(None, None)`.
     #[must_use]
     pub fn tick(&mut self) -> Vec<SchedulerAction> {
         self.tick_with_policies(None, None)
     }
 
-    /// Processes a single event synchronously and returns emitted side-effect actions.
     #[must_use]
     pub fn handle_event(&mut self, event: SchedulerEvent) -> Vec<SchedulerAction> {
         if self.state == SchedulerState::Quit {
@@ -337,7 +312,6 @@ impl<C: Clock> Scheduler<C> {
         }
     }
 
-    /// Builds a `StatusSnapshot` matching the CLI `--status --json` contract.
     #[must_use]
     pub fn status_snapshot(&self) -> StatusSnapshot {
         let enabled = self.is_enabled();
@@ -357,7 +331,6 @@ impl<C: Clock> Scheduler<C> {
         }
     }
 
-    /// Builds a `TraySnapshot` for `sye-platform`.
     #[must_use]
     pub fn tray_snapshot(&self) -> TraySnapshot {
         let status = self.status_snapshot();
@@ -376,7 +349,6 @@ impl<C: Clock> Scheduler<C> {
         }
     }
 
-    /// Builds a `SessionState` snapshot for optional persistence.
     #[must_use]
     pub fn session_state(&self) -> SessionState {
         let (short_index, long_index, long_remaining_secs) =
@@ -1140,7 +1112,6 @@ mod tests {
         let _ = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
         assert!(sched.tray_snapshot().menu_locked);
 
-        // Skip is rejected under strict_break.
         assert!(
             sched
                 .handle_event(SchedulerEvent::OverlayFinished(OverlayOutcome::Skipped))
@@ -1148,7 +1119,6 @@ mod tests {
         );
         assert_eq!(sched.state(), SchedulerState::Break);
 
-        // Postpone is accepted, preserves queue pointer, suppresses chime, falls back on 0s.
         let post_actions =
             sched.handle_event(SchedulerEvent::OverlayFinished(OverlayOutcome::Postponed {
                 duration_secs: 0,
@@ -1168,7 +1138,6 @@ mod tests {
         let clock = FakeClock::default();
         let mut sched = Scheduler::new(test_config(), &clock, 1);
 
-        // Ignored in Start.
         assert!(
             sched
                 .handle_event(SchedulerEvent::TakeBreak { kind: None })
@@ -1176,7 +1145,6 @@ mod tests {
         );
         let _ = sched.handle_event(SchedulerEvent::Start);
 
-        // Timed disable for 1800s.
         let _ = sched.handle_event(SchedulerEvent::Disable {
             duration_secs: Some(1800),
         });
@@ -1191,7 +1159,6 @@ mod tests {
         let _ = sched.tick();
         assert_eq!(sched.state(), SchedulerState::Waiting);
 
-        // Disable until restart never auto-resumes.
         let _ = sched.handle_event(SchedulerEvent::Disable {
             duration_secs: None,
         });
@@ -1235,7 +1202,6 @@ mod tests {
         let mut sched = Scheduler::new(test_config(), &clock, 1);
         let _ = sched.handle_event(SchedulerEvent::Start);
 
-        // Complete 4 short breaks so Long is staged next.
         for _ in 0..4 {
             let _ = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
             let _ = sched.handle_event(SchedulerEvent::OverlayFinished(OverlayOutcome::Completed));
@@ -1245,7 +1211,6 @@ mod tests {
             Some(BreakType::Long)
         );
 
-        // Exact boundary: 60s == long_break_duration_secs (60) -> NOT skipped.
         let _ = sched.handle_event(SchedulerEvent::EnterResting);
         clock.advance_wall_only(Duration::from_secs(60));
         let _ = sched.handle_event(SchedulerEvent::ExitResting {
@@ -1256,7 +1221,6 @@ mod tests {
             Some(BreakType::Long)
         );
 
-        // Strictly greater: 61s > 60s -> skip_long_break() switches back to Short.
         let _ = sched.handle_event(SchedulerEvent::EnterResting);
         clock.advance_wall_only(Duration::from_secs(61));
         let _ = sched.handle_event(SchedulerEvent::ExitResting {
@@ -1275,20 +1239,17 @@ mod tests {
         let mut sched = Scheduler::new(test_config(), &clock, 1);
         let _ = sched.handle_event(SchedulerEvent::Start);
 
-        clock.advance_secs(300); // 600s remaining
+        clock.advance_secs(300);
         let _ = sched.handle_event(SchedulerEvent::EnterResting);
-        // Simulate backward NTP jump while monotonic advances 120s.
         clock.advance_secs(120);
         clock.set_wall_unix(Duration::from_secs(100));
 
         let _ = sched.handle_event(SchedulerEvent::ExitResting {
             credit_idle_secs: Some(120),
         });
-        // 120s > 60s long_dur -> resets cycle cleanly without underflow.
         assert_eq!(sched.state(), SchedulerState::Waiting);
 
-        // Shorter idle (30s <= 60s) with credit-back preserves remaining 600s.
-        clock.advance_secs(300); // 600s remaining
+        clock.advance_secs(300);
         let _ = sched.handle_event(SchedulerEvent::EnterResting);
         clock.advance_secs(30);
         let _ = sched.handle_event(SchedulerEvent::ExitResting {
@@ -1312,19 +1273,16 @@ mod tests {
         let mut sched = Scheduler::new(cfg, &clock, 1);
         let _ = sched.handle_event(SchedulerEvent::Start);
 
-        // Skip #1
         let _ = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
         let _ = sched.handle_event(SchedulerEvent::OverlayFinished(OverlayOutcome::Skipped));
         assert_eq!(sched.status_snapshot().consecutive_skips, 1);
 
-        // Postpone #2 (reaches max_skips == 2)
         let _ = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
         let _ = sched.handle_event(SchedulerEvent::OverlayFinished(OverlayOutcome::Postponed {
             duration_secs: 60,
         }));
         assert_eq!(sched.status_snapshot().consecutive_skips, 2);
 
-        // Next break must have strict_break = true, allow_postpone = false, and status_note set.
         let actions = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
         let has_locked_overlay = actions.iter().any(|a| {
             matches!(
@@ -1338,7 +1296,6 @@ mod tests {
         });
         assert!(has_locked_overlay);
 
-        // Both Skip and Postpone are rejected at the limit.
         assert!(
             sched
                 .handle_event(SchedulerEvent::OverlayFinished(OverlayOutcome::Skipped))
@@ -1352,7 +1309,6 @@ mod tests {
                 .is_empty()
         );
 
-        // Completing the break resets consecutive_skips to 0.
         let _ = sched.handle_event(SchedulerEvent::OverlayFinished(OverlayOutcome::Completed));
         assert_eq!(sched.status_snapshot().consecutive_skips, 0);
     }
@@ -1412,8 +1368,7 @@ mod tests {
         let mut sched = Scheduler::new(test_config(), &clock, 1);
         let _ = sched.handle_event(SchedulerEvent::Start);
 
-        clock.advance_secs(300); // 600s remaining
-        // Brief reading pauses must not trip the 300s default idle threshold.
+        clock.advance_secs(300);
         let _ = sched.handle_event(SchedulerEvent::IdleObserved(Duration::from_secs(5)));
         assert_eq!(sched.state(), SchedulerState::Waiting);
 
@@ -1423,7 +1378,6 @@ mod tests {
         clock.advance_secs(20);
         let _ = sched.handle_event(SchedulerEvent::IdleObserved(Duration::ZERO));
         assert_eq!(sched.state(), SchedulerState::Waiting);
-        // The 300s of idle before the pause count back too.
         assert_eq!(sched.status_snapshot().seconds_until_next_break, 900);
     }
 
@@ -1433,7 +1387,7 @@ mod tests {
         let mut sched = Scheduler::new(test_config(), &clock, 1);
         let _ = sched.handle_event(SchedulerEvent::Start);
 
-        clock.advance_secs(400); // 500s remaining, the last 300s idle
+        clock.advance_secs(400);
         let _ = sched.handle_event(SchedulerEvent::IdleObserved(Duration::from_secs(300)));
         assert_eq!(sched.state(), SchedulerState::Resting);
         assert_eq!(sched.status_snapshot().seconds_until_next_break, 800);
@@ -1450,7 +1404,6 @@ mod tests {
         let mut sched = Scheduler::new(test_config(), &clock, 1);
         let _ = sched.handle_event(SchedulerEvent::Start);
 
-        // Idle began before this countdown started: only its 100s count back.
         clock.advance_secs(100);
         let _ = sched.handle_event(SchedulerEvent::IdleObserved(Duration::from_secs(300)));
         clock.advance_secs(30);

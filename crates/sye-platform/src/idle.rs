@@ -1,12 +1,9 @@
-//! Cross-platform user input idle duration provider (`sye_core::IdleProvider`).
-
 #[cfg(target_os = "linux")]
 use std::sync::Mutex;
 use std::time::Duration;
 
 use sye_core::{IdleProvider, PlatformError};
 
-/// OS user-idle provider supporting Linux (X11/XWayland + Wayland D-Bus), macOS, and Windows.
 pub struct SystemIdleProvider {
     #[cfg(target_os = "linux")]
     x11: Mutex<Option<linux_impl::X11IdleConn>>,
@@ -19,7 +16,6 @@ impl std::fmt::Debug for SystemIdleProvider {
 }
 
 impl SystemIdleProvider {
-    /// Creates a new `SystemIdleProvider`.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -56,7 +52,6 @@ impl IdleProvider for SystemIdleProvider {
     }
 }
 
-/// Parses `HIDIdleTime` (nanoseconds) from `ioreg -c IOHIDSystem -d 4` output on macOS.
 #[cfg(any(target_os = "macos", test))]
 fn parse_macos_hid_idle_time(output: &str) -> Option<Duration> {
     for line in output.lines() {
@@ -128,7 +123,6 @@ mod linux_impl {
             {
                 Some(ms)
             } else {
-                // Reconnect once if no cached connection or the previous connection errored.
                 *guard = X11IdleConn::connect();
                 guard.as_ref().and_then(X11IdleConn::query_ms)
             }
@@ -139,7 +133,6 @@ mod linux_impl {
     fn query_wayland_dbus_idle() -> Option<Duration> {
         let conn = zbus::blocking::Connection::session().ok()?;
 
-        // GNOME Mutter IdleMonitor returns idle time in milliseconds as u64.
         if let Ok(msg) = conn.call_method(
             Some("org.gnome.Mutter.IdleMonitor"),
             "/org/gnome/Mutter/IdleMonitor/Core",
@@ -151,7 +144,6 @@ mod linux_impl {
             return Some(Duration::from_millis(ms));
         }
 
-        // Freedesktop ScreenSaver fallback returns idle time in milliseconds as u32.
         if let Ok(msg) = conn.call_method(
             Some("org.freedesktop.ScreenSaver"),
             "/org/freedesktop/ScreenSaver",

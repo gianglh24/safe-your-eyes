@@ -1,5 +1,3 @@
-//! Optional session persistence (`session.toml`) across daemon restarts.
-
 use std::fmt;
 use std::fs;
 use std::io;
@@ -7,10 +5,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-/// Current supported session schema version.
 pub const SESSION_SCHEMA_VERSION: u32 = 1;
 
-/// Persisted scheduler progress when `Config::persist_state` is enabled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SessionState {
@@ -37,7 +33,6 @@ impl Default for SessionState {
     }
 }
 
-/// Errors produced when loading or saving `SessionState`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionError {
     Io { message: String },
@@ -63,7 +58,6 @@ impl fmt::Display for SessionError {
 impl std::error::Error for SessionError {}
 
 impl SessionState {
-    /// Parses and checks schema version of a TOML session string.
     pub fn from_toml_str(input: &str) -> Result<Self, SessionError> {
         let state: Self = toml::from_str(input).map_err(|err| SessionError::Parse {
             message: err.to_string(),
@@ -77,14 +71,12 @@ impl SessionState {
         Ok(state)
     }
 
-    /// Serializes this session state to TOML.
     pub fn to_toml_string(&self) -> Result<String, SessionError> {
         toml::to_string_pretty(self).map_err(|err| SessionError::Serialize {
             message: err.to_string(),
         })
     }
 
-    /// Loads `SessionState` from `path`, falling back to defaults on missing or corrupt files.
     #[must_use]
     pub fn load_or_default(path: &Path) -> (Self, Option<SessionError>) {
         match fs::read_to_string(path) {
@@ -102,7 +94,6 @@ impl SessionState {
         }
     }
 
-    /// Writes `SessionState` to `path`, creating parent directories when needed.
     pub fn save_to_path(&self, path: &Path) -> Result<(), SessionError> {
         let encoded = self.to_toml_string()?;
         if let Some(parent) = path.parent()

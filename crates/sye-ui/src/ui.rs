@@ -1,7 +1,3 @@
-//! Reusable Cozy styled UI primitives built on `nsh_base`, `theme`, and Astryx layout rules.
-//!
-//! Design system reference: <https://github.com/tunglt1810/cozy>.
-
 use std::sync::{Arc, OnceLock};
 
 use nsh_base::{button, input, link, switch};
@@ -14,11 +10,9 @@ use crate::theme::{SUPPORT_URL, colors, motion, radii, theme_mode_label};
 
 include!(concat!(env!("OUT_DIR"), "/app_icon.rs"));
 
-/// Shared geometry constants for spring-animated sliding indicators.
 const SIDEBAR_ITEM_HEIGHT: f32 = 38.0;
 const SIDEBAR_ITEM_GAP: f32 = 4.0;
 
-/// 24x24 Lucide-style stroke SVG paths rendered via `Painter::stroke_svg` at 16x16.
 const SUN_ICON_SVG: &str = "\
 M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z \
 M12 2v2 M12 20v2 \
@@ -47,14 +41,12 @@ fn app_icon_rgba() -> Arc<[u8]> {
     }))
 }
 
-/// Renders the embedded Safe Your Eyes squircle app icon at `size_px`.
 pub(crate) fn app_icon(size_px: f32) -> impl IntoElement {
     let src = ImageSrc::rgba(APP_ICON_SIZE, APP_ICON_SIZE, app_icon_rgba())
         .size(Size::new(px(size_px), px(size_px)));
     image(src).w(px(size_px)).h(px(size_px)).flex_shrink_0()
 }
 
-/// Pastel KPI card color variant matching `tunglt1810/cozy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KpiTone {
     Sage,
@@ -83,7 +75,6 @@ impl KpiTone {
     }
 }
 
-/// Page H1 heading paired with a Cozy pastel highlighter bar sweeping from left (`tunglt1810/cozy`).
 pub(crate) fn page_heading(
     title: impl IntoReactive<SharedString>,
     highlight_scale: &AnimatedValue,
@@ -111,8 +102,6 @@ pub(crate) fn page_heading(
         )
 }
 
-/// Wraps a settings list item in Cozy's `.cozy-list-row` staggered entrance (`10px` rise, `260ms`,
-/// `28ms` step capped at row 12) when `animate` is true and Reduce Motion is disabled.
 pub(crate) fn stagger_item(
     index: usize,
     animate: bool,
@@ -136,7 +125,6 @@ pub(crate) fn stagger_item(
     container.bind_opacity(&opacity).bind_translate_y(&y)
 }
 
-/// Top-right Cozy theme toggle pill with crisp vector SVG icon.
 pub(crate) fn theme_toggle_button(
     mode: impl Fn() -> ThemeMode + Copy + 'static,
     on_press: impl Fn() + 'static,
@@ -190,7 +178,6 @@ pub(crate) fn theme_toggle_button(
     )
 }
 
-/// Section heading with optional supporting caption inside the unified Form Card.
 pub(crate) fn section_header(title: &'static str, caption: &'static str) -> impl IntoElement {
     view()
         .gap_1()
@@ -203,7 +190,6 @@ pub(crate) fn section_header(title: &'static str, caption: &'static str) -> impl
         .child(text(caption).text_xs().text_color(colors::TEXT_SECONDARY))
 }
 
-/// Hairline horizontal divider (`1px`) separating sections inside a Form Card (Astryx Divider).
 pub(crate) fn section_divider() -> impl IntoElement {
     let (bx1, by1, bx2, by2) = motion::COZY_STANDARD_BEZIER;
     view()
@@ -214,7 +200,6 @@ pub(crate) fn section_divider() -> impl IntoElement {
         .ease_bezier(bx1, by1, bx2, by2)
 }
 
-/// Cozy primary pill button (warm coral fill + WCAG AAA dark espresso text).
 pub(crate) fn primary_button(
     label: impl IntoReactive<SharedString>,
     on_press: impl Fn() + 'static,
@@ -241,7 +226,6 @@ pub(crate) fn primary_button(
         )
 }
 
-/// Cozy secondary pill button (`bg-surface` fill + `border-emphasized`, weight 600 per Cozy v0.2.0).
 pub(crate) fn secondary_button(
     label: impl IntoReactive<SharedString>,
     on_press: impl Fn() + 'static,
@@ -270,7 +254,6 @@ pub(crate) fn secondary_button(
         )
 }
 
-/// Cozy ghost pill button for tertiary/cancel actions (weight 600 per Cozy v0.2.0).
 pub(crate) fn ghost_button(
     label: impl IntoReactive<SharedString>,
     on_press: impl Fn() + 'static,
@@ -296,7 +279,6 @@ pub(crate) fn ghost_button(
         )
 }
 
-/// Cozy destructive pill button using measured `error-muted` / `on-error-muted` pair from `tunglt1810/cozy`.
 pub(crate) fn destructive_button(
     label: impl IntoReactive<SharedString>,
     on_press: impl Fn() + 'static,
@@ -322,7 +304,6 @@ pub(crate) fn destructive_button(
         )
 }
 
-/// Pastel KPI summary card with concentric corner radius, accent dot, label, and value.
 pub(crate) fn pastel_kpi_card(
     tone: KpiTone,
     label: &'static str,
@@ -368,7 +349,6 @@ pub(crate) fn pastel_kpi_card(
         )
 }
 
-/// Cozy toggle switch row aligned to the shared 36px control rhythm (Astryx control-rhythm DR1).
 pub(crate) fn cozy_switch(
     label: &'static str,
     checked: impl Fn() -> bool + 'static,
@@ -377,7 +357,6 @@ pub(crate) fn cozy_switch(
     cozy_switch_with_disabled(label, checked, || false, on_change)
 }
 
-/// Cozy toggle switch row with reactive `disabled` state.
 pub(crate) fn cozy_switch_with_disabled(
     label: &'static str,
     checked: impl Fn() -> bool + 'static,
@@ -435,7 +414,6 @@ pub(crate) fn cozy_switch_with_disabled(
         )
 }
 
-/// Cozy styled single-line text input (`12px` radius, `36px` height, `bg-surface` per Cozy v0.2.0).
 pub(crate) fn cozy_input(
     placeholder: &'static str,
     value: impl Fn() -> String + 'static,
@@ -444,7 +422,6 @@ pub(crate) fn cozy_input(
     cozy_input_with_disabled(placeholder, value, || false, on_change)
 }
 
-/// Cozy styled single-line text input with reactive `disabled` state.
 pub(crate) fn cozy_input_with_disabled(
     placeholder: &'static str,
     value: impl Fn() -> String + 'static,
@@ -479,7 +456,6 @@ pub(crate) fn cozy_input_with_disabled(
         .disabled_style(|s| s.opacity(0.45))
 }
 
-/// Spring-animated sliding background indicator for the Floating Sage Sidebar (`tunglt1810/cozy`).
 pub(crate) fn sidebar_nav_indicator(active_index: impl Fn() -> u8 + 'static) -> impl IntoElement {
     let step = SIDEBAR_ITEM_HEIGHT + SIDEBAR_ITEM_GAP;
     view()
@@ -496,7 +472,6 @@ pub(crate) fn sidebar_nav_indicator(active_index: impl Fn() -> u8 + 'static) -> 
         .ease_spring(motion::COZY_SPRING)
 }
 
-/// Sidebar navigation button layered above `sidebar_nav_indicator`.
 pub(crate) fn sidebar_nav_item(
     label: &'static str,
     selected: impl Fn() -> bool + 'static,
@@ -523,7 +498,6 @@ pub(crate) fn sidebar_nav_item(
         )
 }
 
-/// Warm status banner using Cozy v0.2.0 contrast-checked fill, text, and border tokens.
 pub(crate) fn status_banner(
     is_error: bool,
     message: impl IntoReactive<SharedString>,
@@ -552,7 +526,6 @@ pub(crate) fn status_banner(
         )
 }
 
-/// Direct Buy Me a Coffee link styled as a Cozy coral pill CTA.
 pub(crate) fn support_link(label: &'static str) -> impl IntoElement {
     link()
         .href(SUPPORT_URL)
@@ -575,7 +548,6 @@ pub(crate) fn support_link(label: &'static str) -> impl IntoElement {
         )
 }
 
-/// Encodes `SUPPORT_URL` into a cached square boolean QR matrix (`true` = dark module).
 pub(crate) fn build_support_qr_matrix() -> Option<&'static (usize, Box<[bool]>)> {
     static MATRIX: OnceLock<Option<(usize, Box<[bool]>)>> = OnceLock::new();
     MATRIX
@@ -592,7 +564,6 @@ pub(crate) fn build_support_qr_matrix() -> Option<&'static (usize, Box<[bool]>)>
         .as_ref()
 }
 
-/// Scannable Buy Me a Coffee QR code component with Cozy warm cream quiet zone and espresso modules.
 pub(crate) fn support_qr_card() -> impl IntoElement {
     let qr_bg = rgb(0xFFFEF7);
     let qr_fg = rgb(0x261101);
@@ -648,7 +619,6 @@ mod tests {
                 "QR code width must be at least Version 1 (21)"
             );
             assert_eq!(modules.len(), *width * *width);
-            // Top-left finder pattern corner (0, 0) is always dark in standard QR codes.
             assert_eq!(modules.first().copied(), Some(true));
         }
     }

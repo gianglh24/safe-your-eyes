@@ -1,9 +1,3 @@
-//! Main-thread OS event loop integration for the background daemon.
-//!
-//! `tray-icon` requires an active `NSApplication` event loop on the main thread on macOS and a
-//! Win32 message pump on Windows so the status bar / notification area icon renders and responds
-//! to user clicks without creating any GUI window or GPU context.
-
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
@@ -12,7 +6,6 @@ use crate::TrayEvent;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 const MAX_EVENTS_PER_PUMP: usize = 64;
 
-/// Platform-specific daemon event loop handle.
 pub struct PlatformEventLoop {
     #[cfg(target_os = "macos")]
     inner: Option<macos_impl::MacOsEventLoop>,
@@ -21,11 +14,6 @@ pub struct PlatformEventLoop {
 }
 
 impl PlatformEventLoop {
-    /// Initializes the OS event loop before creating `TrayHandle`.
-    ///
-    /// On macOS, initializes `NSApplication` in `Accessory` activation policy, attaches an
-    /// `NSApplicationDelegate` forwarding reopen and terminate requests to `event_tx`, and calls
-    /// `finishLaunching()` when invoked on the main thread.
     #[must_use]
     pub fn new(event_tx: Sender<TrayEvent>) -> Self {
         #[cfg(target_os = "macos")]
@@ -42,7 +30,6 @@ impl PlatformEventLoop {
         }
     }
 
-    /// Pumps pending OS events for up to `timeout` without blocking indefinitely.
     pub fn pump_events(&self, timeout: Duration) {
         #[cfg(target_os = "macos")]
         {
@@ -67,10 +54,6 @@ impl PlatformEventLoop {
         }
     }
 
-    /// Completes a deferred OS termination handshake after daemon cleanup finishes.
-    ///
-    /// On macOS, calls `replyToApplicationShouldTerminate(true)` only if `AppKit` previously
-    /// requested termination via `applicationShouldTerminate:`.
     pub fn finish_termination(&self) {
         #[cfg(target_os = "macos")]
         if let Some(ref inner) = self.inner {
@@ -78,7 +61,6 @@ impl PlatformEventLoop {
         }
     }
 
-    /// Returns `true` when macOS launched the daemon automatically as a user Login Item.
     #[must_use]
     pub fn was_launched_as_login_item(&self) -> bool {
         #[cfg(target_os = "macos")]
@@ -93,7 +75,6 @@ impl PlatformEventLoop {
         }
     }
 
-    /// Yields foreground activation rights before spawning a GUI child process.
     pub fn prepare_child_activation(&self) {
         #[cfg(target_os = "macos")]
         if let Some(ref inner) = self.inner {
@@ -101,7 +82,6 @@ impl PlatformEventLoop {
         }
     }
 
-    /// Brings an already-running GUI child process (`pid`) to the foreground.
     pub fn activate_child(&self, pid: u32) {
         #[cfg(target_os = "macos")]
         if let Some(ref inner) = self.inner {
@@ -194,7 +174,6 @@ mod macos_impl {
                     .termination_requested
                     .store(true, Ordering::Release);
                 let _ = self.ivars().event_tx.send(TrayEvent::Quit);
-                // Return TerminateLater so daemon.rs completes cleanup before replying true without aborting OS logout/restart.
                 NSApplicationTerminateReply::TerminateLater
             }
         }
@@ -245,7 +224,6 @@ mod macos_impl {
                     did_finish_launching,
                 }
             });
-            // Pump until AppKit dispatches the initial `'aevt'/'oapp'` AppleEvent and fires `applicationDidFinishLaunching:`.
             let start = Instant::now();
             while !instance.did_finish_launching.load(Ordering::Acquire) {
                 let remaining = Duration::from_millis(200).saturating_sub(start.elapsed());
@@ -330,7 +308,6 @@ mod macos_impl {
 
     impl Drop for MacOsEventLoop {
         fn drop(&mut self) {
-            // Detach before dropping `_delegate` so AppKit never retains a dangling delegate ref.
             self.app.setDelegate(None);
         }
     }

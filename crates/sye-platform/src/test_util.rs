@@ -1,5 +1,3 @@
-//! Hermetic temporary directory helper rooted under `<repo>/.tmp/` for tests.
-
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -7,7 +5,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEST_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// RAII temporary directory inside `<repo>/.tmp/sye-platform-tests/`.
 pub(crate) struct TestTempDir {
     path: PathBuf,
 }

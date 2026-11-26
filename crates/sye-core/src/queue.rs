@@ -1,11 +1,8 @@
-//! Dual-tier short/long break queue with 4:1 ratio, deterministic shuffling, and per-break overrides.
-
 use serde::{Deserialize, Serialize};
 
 use crate::config::{BreakSpec, BreakType, Config};
 use crate::rng::SplitMix64;
 
-/// Break specification resolved with effective tier or per-break timing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedBreak {
     pub break_type: BreakType,
@@ -14,14 +11,12 @@ pub struct ResolvedBreak {
     pub duration_secs: u64,
 }
 
-/// Break currently staged at the front of `BreakQueue`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedBreak {
     pub spec: ResolvedBreak,
     pub wait_secs: u64,
 }
 
-/// Dual-tier break queue managing short and long exercises.
 #[derive(Debug, Clone)]
 pub struct BreakQueue {
     short_breaks: Vec<ResolvedBreak>,
@@ -36,9 +31,6 @@ pub struct BreakQueue {
 }
 
 impl BreakQueue {
-    /// Builds a `BreakQueue` from `config` and an explicit PRNG seed.
-    ///
-    /// Returns `None` if neither tier contains any valid exercise.
     #[must_use]
     pub fn from_config(config: &Config, seed: u64) -> Option<Self> {
         let mut short_breaks = resolve_tier(
@@ -89,7 +81,6 @@ impl BreakQueue {
         })
     }
 
-    /// Restores persisted queue indices and remaining long-break countdown safely.
     pub fn restore_progress(
         &mut self,
         short_index: usize,
@@ -111,25 +102,21 @@ impl BreakQueue {
         self.current = self.select_next();
     }
 
-    /// Returns the currently staged break.
     #[must_use]
     pub const fn current(&self) -> &QueuedBreak {
         &self.current
     }
 
-    /// Returns the current short-break index (next slot after the staged break).
     #[must_use]
     pub const fn short_index(&self) -> usize {
         self.short_index
     }
 
-    /// Returns the current long-break index (next slot after the staged break).
     #[must_use]
     pub const fn long_index(&self) -> usize {
         self.long_index
     }
 
-    /// Returns the short-break index to persist so restoring resumes at the staged break.
     #[must_use]
     pub fn persisted_short_index(&self) -> usize {
         persisted_index(
@@ -139,7 +126,6 @@ impl BreakQueue {
         )
     }
 
-    /// Returns the long-break index to persist so restoring resumes at the staged break.
     #[must_use]
     pub fn persisted_long_index(&self) -> usize {
         persisted_index(
@@ -149,7 +135,6 @@ impl BreakQueue {
         )
     }
 
-    /// Returns remaining seconds until the next long break (if long breaks exist).
     #[must_use]
     pub const fn long_remaining_secs(&self) -> Option<u64> {
         if self.long_breaks.is_empty() {
@@ -159,7 +144,6 @@ impl BreakQueue {
         }
     }
 
-    /// Returns the duration of the next long break (if any long break is configured).
     #[must_use]
     pub fn next_long_duration_secs(&self) -> Option<u64> {
         if self.current.spec.break_type == BreakType::Long {
@@ -170,7 +154,6 @@ impl BreakQueue {
             .map(|b| b.duration_secs)
     }
 
-    /// Returns whether the queue has at least one break of `kind`.
     #[must_use]
     pub const fn has_break_type(&self, kind: BreakType) -> bool {
         match kind {
@@ -179,8 +162,6 @@ impl BreakQueue {
         }
     }
 
-    /// Advances the queue after the current break completes or is skipped.
-    ///
     /// Never call this on postpone.
     pub fn advance(&mut self) -> &QueuedBreak {
         if !self.long_breaks.is_empty() {
@@ -204,7 +185,6 @@ impl BreakQueue {
         &self.current
     }
 
-    /// Selects a break for an immediate manual `TakeBreak` request.
     pub fn select_manual(&mut self, kind: Option<BreakType>) -> Option<QueuedBreak> {
         match kind {
             None => Some(self.current.clone()),
@@ -237,7 +217,6 @@ impl BreakQueue {
         }
     }
 
-    /// Resets the long-break countdown after a natural rest longer than `long_break_duration`.
     pub fn skip_long_break(&mut self) {
         self.manual_short_override = false;
         if self.long_breaks.is_empty() {
@@ -589,7 +568,6 @@ mod tests {
         let Some(mut queue) = BreakQueue::from_config(&cfg, 1) else {
             return Err("expected queue".into());
         };
-        // Advance 4 short breaks so Long is staged next.
         for _ in 0..4 {
             assert_eq!(queue.current().spec.break_type, BreakType::Short);
             queue.advance();
@@ -600,7 +578,6 @@ mod tests {
         assert_eq!(queue.current().spec.break_type, BreakType::Short);
         assert_eq!(queue.long_remaining_secs(), Some(4500));
 
-        // Advance 2 short breaks, then skip_long_break mid-cycle.
         queue.advance();
         queue.advance();
         assert_eq!(queue.long_remaining_secs(), Some(2700));

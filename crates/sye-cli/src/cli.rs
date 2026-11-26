@@ -1,8 +1,5 @@
-//! Zero-dependency CLI argument parser for `safe-your-eyes`.
-
 use std::path::PathBuf;
 
-/// Parsed CLI command mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CommandMode {
     Daemon,
@@ -22,7 +19,6 @@ pub(crate) enum CommandMode {
     InternalSettings,
 }
 
-/// Fully parsed CLI invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CliArgs {
     pub(crate) config: Option<PathBuf>,
@@ -32,7 +28,6 @@ pub(crate) struct CliArgs {
     pub(crate) mode: CommandMode,
 }
 
-/// Errors returned while parsing CLI arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CliParseError {
     pub(crate) message: String,
@@ -46,7 +41,6 @@ impl std::fmt::Display for CliParseError {
 
 impl std::error::Error for CliParseError {}
 
-/// Usage text printed for `-h` / `--help`.
 pub(crate) const HELP_TEXT: &str = "\
 Safe Your Eyes — lightweight cross-platform eye-protection app
 
@@ -73,7 +67,6 @@ OPTIONS:
     -h, --help                Print help information
 ";
 
-/// Parses CLI arguments (excluding `argv[0]`).
 pub(crate) fn parse_args<I, S>(args: I) -> Result<CliArgs, CliParseError>
 where
     I: IntoIterator<Item = S>,
@@ -161,7 +154,6 @@ where
                 set_mode(&mut mode, CommandMode::InternalOverlay { payload_json })?;
             }
             "--internal-settings" => set_mode(&mut mode, CommandMode::InternalSettings)?,
-            // macOS LaunchServices passes a Process Serial Number (`-psn_*`) when launching `.app` bundles.
             other if other.strip_prefix("-psn_").is_some_and(|s| !s.is_empty()) => {}
             other => {
                 if let Some(val) = other.strip_prefix("--config=") {

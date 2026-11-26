@@ -1,5 +1,3 @@
-//! Cross-platform OS autostart entry generation and management.
-
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -7,7 +5,6 @@ use std::path::{Path, PathBuf};
 use directories::BaseDirs;
 use sye_core::PlatformError;
 
-/// Descriptor for an application autostart entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutostartEntry {
     pub app_id: String,
@@ -17,7 +14,6 @@ pub struct AutostartEntry {
 }
 
 impl AutostartEntry {
-    /// Creates a default `AutostartEntry` for `safe-your-eyes`.
     #[must_use]
     pub fn for_safe_your_eyes(executable: PathBuf) -> Self {
         Self {
@@ -29,39 +25,33 @@ impl AutostartEntry {
     }
 }
 
-/// Manages enabling, disabling, and querying an OS autostart entry file.
 #[derive(Debug, Clone)]
 pub struct AutostartManager {
     entry_path: PathBuf,
 }
 
 impl AutostartManager {
-    /// Creates an `AutostartManager` targeting an explicit file path.
     #[must_use]
     pub const fn new(entry_path: PathBuf) -> Self {
         Self { entry_path }
     }
 
-    /// Creates an `AutostartManager` targeting the current OS's standard autostart location.
     pub fn system_default() -> Result<Self, PlatformError> {
         Ok(Self {
             entry_path: default_autostart_path()?,
         })
     }
 
-    /// Returns the managed autostart file path.
     #[must_use]
     pub fn entry_path(&self) -> &Path {
         &self.entry_path
     }
 
-    /// Returns `true` if the autostart entry currently exists on disk.
     #[must_use]
     pub fn is_enabled(&self) -> bool {
         self.entry_path.is_file()
     }
 
-    /// Writes the platform-appropriate autostart entry file, creating parent directories if needed.
     pub fn enable(&self, entry: &AutostartEntry) -> Result<(), PlatformError> {
         if let Some(parent) = self.entry_path.parent()
             && !parent.as_os_str().is_empty()
@@ -72,7 +62,6 @@ impl AutostartManager {
         fs::write(&self.entry_path, content).map_err(|err| PlatformError::Io(err.to_string()))
     }
 
-    /// Removes the autostart entry file if present. Idempotent when already disabled.
     pub fn disable(&self) -> Result<(), PlatformError> {
         match fs::remove_file(&self.entry_path) {
             Ok(()) => Ok(()),
@@ -81,7 +70,6 @@ impl AutostartManager {
         }
     }
 
-    /// Synchronizes the autostart file on disk with `enabled`.
     pub fn sync(&self, enabled: bool, entry: &AutostartEntry) -> Result<(), PlatformError> {
         if enabled {
             self.enable(entry)
@@ -111,7 +99,6 @@ fn has_custom_config_override(custom_config: Option<&Path>) -> bool {
     !crate::AppPaths::resolve().is_ok_and(|p| p.config_file == cfg_path)
 }
 
-/// Returns `true` when `exe` resides inside a macOS `.app/Contents/MacOS/` bundle directory.
 #[must_use]
 pub fn is_macos_app_bundle_executable(exe: &Path) -> bool {
     let Some(macos_dir) = exe.parent() else {
@@ -150,7 +137,6 @@ const fn interpret_sm_app_service_status(status: isize) -> Option<bool> {
     match status {
         SM_STATUS_ENABLED => Some(true),
         SM_STATUS_NOT_REGISTERED => Some(false),
-        // `RequiresApproval` and `NotFound` defer to `config.toml` so startup does not unregister a pending-approval item.
         _ => None,
     }
 }
@@ -162,7 +148,6 @@ fn should_bootout_launchd_job(launchctl_print_stdout: &str) -> bool {
         .any(|line| line.trim() == "state = running")
 }
 
-/// Queries the OS login-item state when managed externally (such as macOS System Settings).
 #[must_use]
 pub fn query_system_autostart(custom_config: Option<&Path>) -> Option<bool> {
     #[cfg(target_os = "macos")]
@@ -182,7 +167,6 @@ pub fn query_system_autostart(custom_config: Option<&Path>) -> Option<bool> {
     None
 }
 
-/// Synchronizes the current user's OS autostart entry for the running `safe-your-eyes` binary.
 pub fn sync_system_autostart(
     enabled: bool,
     custom_config: Option<&Path>,
@@ -268,7 +252,6 @@ mod macos_login_item {
         if !legacy_plist.exists() {
             return;
         }
-        // Delete the plist before `launchctl` runs so `launchd` cannot kill us first.
         let _ = std::fs::remove_file(legacy_plist);
         // SAFETY: `geteuid` is a thread-safe POSIX syscall with no preconditions.
         let uid = unsafe { libc::geteuid() };
@@ -313,7 +296,6 @@ mod macos_login_item {
     }
 }
 
-/// Resolves the standard per-user autostart file path for the current OS.
 pub fn default_autostart_path() -> Result<PathBuf, PlatformError> {
     let base = BaseDirs::new().ok_or_else(|| {
         PlatformError::Unavailable("unable to determine user base directories".to_owned())
@@ -362,7 +344,6 @@ fn render_for_current_os(entry: &AutostartEntry) -> String {
     }
 }
 
-/// Renders an XDG autostart `.desktop` file for Linux desktop environments.
 #[must_use]
 pub fn render_linux_desktop_entry(entry: &AutostartEntry) -> String {
     let exe = entry.executable.to_string_lossy();
@@ -388,7 +369,6 @@ pub fn render_linux_desktop_entry(entry: &AutostartEntry) -> String {
     )
 }
 
-/// Renders a macOS `launchd` `LaunchAgent` `.plist` XML file.
 #[must_use]
 pub fn render_macos_launch_agent_plist(entry: &AutostartEntry) -> String {
     let exe = entry.executable.to_string_lossy();
@@ -404,7 +384,6 @@ pub fn render_macos_launch_agent_plist(entry: &AutostartEntry) -> String {
              <string>",
     );
     push_escaped_xml(&mut out, &entry.app_id);
-    // Associates fallback LaunchAgent jobs with the .app bundle so macOS System Settings shows the app icon.
     out.push_str(
         "</string>\n\
              <key>AssociatedBundleIdentifiers</key>\n\
@@ -433,7 +412,6 @@ pub fn render_macos_launch_agent_plist(entry: &AutostartEntry) -> String {
     out
 }
 
-/// Renders a Windows Startup folder `.cmd` launcher script (no Registry FFI required).
 #[must_use]
 pub fn render_windows_startup_cmd(entry: &AutostartEntry) -> String {
     let exe = entry.executable.to_string_lossy();
@@ -681,7 +659,6 @@ mod tests {
 
         mgr.disable()?;
         assert!(!mgr.is_enabled());
-        // Second disable must succeed idempotently.
         mgr.disable()?;
 
         mgr.sync(true, &entry)?;

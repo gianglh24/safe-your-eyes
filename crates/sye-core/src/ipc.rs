@@ -1,5 +1,3 @@
-//! Typed NDJSON local IPC protocol between CLI clients and the background daemon.
-
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -7,10 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::BreakType;
 use crate::scheduler::StatusSnapshot;
 
-/// Maximum permitted byte length of a single IPC JSON line (16 KiB).
 pub const MAX_IPC_LINE_BYTES: usize = 16 * 1024;
 
-/// Command sent from a CLI client to the running daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum IpcCommand {
@@ -28,7 +24,6 @@ pub enum IpcCommand {
     Quit,
 }
 
-/// Structured error codes returned in `IpcResponse::Error`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IpcErrorCode {
@@ -38,7 +33,6 @@ pub enum IpcErrorCode {
     InternalError,
 }
 
-/// Response sent from the daemon back to a CLI client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum IpcResponse {
@@ -53,7 +47,6 @@ pub enum IpcResponse {
     },
 }
 
-/// Errors produced when encoding or decoding IPC lines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IpcCodecError {
     LineTooLong { len: usize, max: usize },
@@ -77,7 +70,6 @@ impl fmt::Display for IpcCodecError {
 
 impl std::error::Error for IpcCodecError {}
 
-/// Encodes an IPC message as a compact single-line JSON string terminated with `'\n'`.
 pub fn encode_line<T: Serialize>(msg: &T) -> Result<String, IpcCodecError> {
     let mut json =
         serde_json::to_string(msg).map_err(|err| IpcCodecError::Serialize(err.to_string()))?;
@@ -91,8 +83,6 @@ pub fn encode_line<T: Serialize>(msg: &T) -> Result<String, IpcCodecError> {
     Ok(json)
 }
 
-/// Decodes a single NDJSON line into an `IpcCommand`, returning a structured `IpcResponse::Error`
-/// on malformed, oversized, or unknown commands.
 pub fn decode_command(line: &str) -> Result<IpcCommand, IpcResponse> {
     if line.len() > MAX_IPC_LINE_BYTES {
         return Err(IpcResponse::Error {
@@ -120,7 +110,6 @@ pub fn decode_command(line: &str) -> Result<IpcCommand, IpcResponse> {
     }
 }
 
-/// Decodes a single NDJSON line into an `IpcResponse`.
 pub fn decode_response(line: &str) -> Result<IpcResponse, IpcCodecError> {
     if line.len() > MAX_IPC_LINE_BYTES {
         return Err(IpcCodecError::LineTooLong {

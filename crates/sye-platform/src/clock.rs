@@ -1,17 +1,13 @@
-//! Real OS clock implementation of `sye_core::Clock`.
-
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use sye_core::Clock;
 
-/// Monotonic and wall-clock time source backed by `std::time`.
 #[derive(Debug, Clone, Copy)]
 pub struct SystemClock {
     origin: Instant,
 }
 
 impl SystemClock {
-    /// Creates a new `SystemClock` anchored at the current monotonic instant.
     #[must_use]
     pub fn new() -> Self {
         Self {

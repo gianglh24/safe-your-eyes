@@ -1,19 +1,13 @@
-//! Pure-Rust PCM WAV chime synthesizer for pre-break and post-break audible alerts.
-
 use std::f64::consts::TAU;
 
 use serde::{Deserialize, Serialize};
 
-/// Sample rate in Hz for synthesized chime audio.
 pub const CHIME_SAMPLE_RATE: u32 = 22_050;
 
-/// Number of audio channels (mono).
 pub const CHIME_CHANNELS: u16 = 1;
 
-/// Bit depth per sample (signed 16-bit PCM).
 pub const CHIME_BITS_PER_SAMPLE: u16 = 16;
 
-/// Kind of synthesized audible chime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChimeKind {
@@ -30,15 +24,10 @@ const fn note_samples(dur_ms: u32) -> u32 {
     ((CHIME_SAMPLE_RATE as u64 * dur_ms as u64) / 1000) as u32
 }
 
-/// Synthesizes a complete RIFF/WAVE 16-bit mono PCM chime in memory.
-///
-/// `volume` is clamped to `0..=100`. A volume of `0` yields a valid silent WAV file.
 #[must_use]
 pub fn synthesize_chime_wav(kind: ChimeKind, volume: u8) -> Vec<u8> {
     let notes: &[(f64, u32)] = match kind {
-        // Gentle ascending two-tone chime (C5 -> E5, 360 ms total).
         ChimeKind::PreBreak => &[(523.25, 180), (659.25, 180)],
-        // Warm resolving two-tone chime (G5 -> C5, 400 ms total).
         ChimeKind::PostBreak => &[(783.99, 160), (523.25, 240)],
     };
 

@@ -1,5 +1,3 @@
-//! Cross-platform desktop pre-break notification adapter (`sye_core::Notifier`).
-
 #[cfg(all(unix, not(target_os = "macos")))]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -14,8 +12,6 @@ const APP_NAME: &str = "Safe Your Eyes";
 #[cfg(all(unix, not(target_os = "macos")))]
 const APP_ICON: &str = "safe-your-eyes";
 
-/// Desktop notification adapter backed by a non-activating banner window on macOS and Windows and
-/// `notify-rust` on Linux.
 pub struct OsNotifier {
     enabled: bool,
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -32,7 +28,6 @@ struct LinuxActive {
 #[cfg(all(unix, not(target_os = "macos")))]
 fn spawn_close_listener(id: u32, user_closed: &Arc<AtomicBool>) {
     let user_closed = Arc::clone(user_closed);
-    // `handle_action` blocks until the server reports `ActionInvoked` or `NotificationClosed`.
     let _ = std::thread::Builder::new()
         .name("sye-notify-close".to_owned())
         .spawn(move || {
@@ -56,7 +51,6 @@ impl std::fmt::Debug for OsNotifier {
 }
 
 impl OsNotifier {
-    /// Creates an active OS notifier.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -66,7 +60,6 @@ impl OsNotifier {
         }
     }
 
-    /// Creates a no-op notifier for `--headless` mode or tests.
     #[must_use]
     pub const fn noop() -> Self {
         Self {
@@ -83,7 +76,6 @@ impl Default for OsNotifier {
     }
 }
 
-/// Formats the `(summary, body)` pair for a pre-break notification.
 #[must_use]
 pub fn format_pre_break_notification(
     break_type: BreakType,
@@ -104,8 +96,6 @@ pub fn format_pre_break_notification(
     (summary, body)
 }
 
-/// Returns the bottom-right banner origin inside a Win32 work area given as
-/// `(left, top, right, bottom)` in top-down screen coordinates.
 #[cfg(any(windows, test))]
 #[must_use]
 pub(crate) const fn compute_windows_banner_origin(
@@ -179,7 +169,6 @@ impl Notifier for OsNotifier {
                         .body(&body)
                         .timeout(Timeout::Milliseconds(timeout_ms));
                     if active.handle.update().is_ok() {
-                        // The server can assign a new id when the replaced notification expired.
                         let id = active.handle.id();
                         if id != active.listened_id {
                             active.listened_id = id;
@@ -279,9 +268,6 @@ mod macos_impl {
     const TEXT_WIDTH: f64 = BANNER_WIDTH - TEXT_X - PAD_RIGHT;
     const MAX_FIT_HEIGHT: f64 = 10_000.0;
 
-    // `UNUserNotificationCenter::addNotificationRequest:` re-animates a new top-right banner on
-    // every countdown second and Temporary Banners auto-hide after ~5s, so macOS renders an
-    // in-place non-activating `NSPanel` instead.
     static USER_DISMISSED: AtomicBool = AtomicBool::new(false);
 
     thread_local! {
@@ -295,7 +281,6 @@ mod macos_impl {
         struct BannerClickView;
 
         impl BannerClickView {
-            // Deliver the dismissal click immediately while another app holds focus.
             #[unsafe(method(acceptsFirstMouse:))]
             fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
                 true
@@ -304,7 +289,6 @@ mod macos_impl {
             #[unsafe(method(mouseDown:))]
             fn mouse_down(&self, _event: &NSEvent) {
                 USER_DISMISSED.store(true, Ordering::Release);
-                // Hide immediately; defer panel destruction to avoid deallocating `self` inside `mouseDown:`.
                 if let Some(window) = self.window() {
                     window.orderOut(None);
                 }
@@ -608,7 +592,6 @@ mod windows_impl {
 
     const CLASS_NAME: &str = "SyePreBreakBanner";
     const WINDOW_TITLE: &str = "Safe Your Eyes";
-    // `sye-cli/build.rs` embeds the app icon through `winresource::set_icon`, which uses ID 1.
     const APP_ICON_RESOURCE_ID: usize = 1;
     const BASE_DPI: i32 = 96;
     const BANNER_WIDTH: i32 = 356;
@@ -631,8 +614,6 @@ mod windows_impl {
         body: COLORREF,
     }
 
-    // `GetSysColor` ignores the app dark mode setting, so dark mode uses the Windows 11 flyout
-    // colors. `COLORREF` is `0x00BBGGRR`.
     const DARK_PALETTE: Palette = Palette {
         background: 0x002C_2C2C,
         title: 0x00FF_FFFF,
@@ -721,8 +702,6 @@ mod windows_impl {
         unsafe { CreateFontIndirectW(&font) }
     }
 
-    /// Runs banner Win32 calls per-monitor DPI aware so text stays sharp on scaled displays
-    /// without changing the process-wide awareness that the tray icon uses.
     struct DpiScope(DPI_AWARENESS_CONTEXT);
 
     impl DpiScope {

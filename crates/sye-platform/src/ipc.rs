@@ -1,5 +1,3 @@
-//! Single-instance local IPC server and client using `interprocess` local sockets.
-
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -17,10 +15,8 @@ use sye_core::ipc::{
     decode_response, encode_line,
 };
 
-/// Default read/write timeout applied to IPC client and server connections.
 pub const DEFAULT_IPC_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Error returned by local IPC server or client operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IpcError {
     AlreadyRunning,
@@ -65,7 +61,6 @@ impl From<IpcError> for PlatformError {
     }
 }
 
-/// Single-instance local IPC server bound to a filesystem socket (Unix) or named pipe (Windows).
 pub struct IpcServer {
     endpoint: PathBuf,
     listener: Listener,
@@ -80,10 +75,6 @@ impl fmt::Debug for IpcServer {
 }
 
 impl IpcServer {
-    /// Binds a single-instance IPC listener at `endpoint`.
-    ///
-    /// On Unix, probes any pre-existing socket file: returns `Err(IpcError::AlreadyRunning)` if
-    /// another daemon responds, or removes a stale socket file before binding.
     pub fn bind(endpoint: &Path) -> Result<Self, IpcError> {
         #[cfg(unix)]
         {
@@ -111,29 +102,21 @@ impl IpcServer {
         })
     }
 
-    /// Returns the socket path or pipe endpoint bound by this server.
     #[must_use]
     pub fn endpoint(&self) -> &Path {
         &self.endpoint
     }
 
-    /// Configures non-blocking mode for accepting connections.
     pub fn set_nonblocking(&self, mode: ListenerNonblockingMode) -> Result<(), IpcError> {
         self.listener
             .set_nonblocking(mode)
             .map_err(|err| IpcError::Io(err.to_string()))
     }
 
-    /// Configures the listener so `accept_once` returns `Ok(false)` immediately when no client
-    /// is queued, while accepted client streams remain blocking with timeouts.
     pub fn set_accept_nonblocking(&self) -> Result<(), IpcError> {
         self.set_nonblocking(ListenerNonblockingMode::Accept)
     }
 
-    /// Accepts a single client connection, decodes one bounded NDJSON command, invokes `handler`,
-    /// and writes the NDJSON response.
-    ///
-    /// Returns `Ok(false)` when the listener is non-blocking and no client is queued.
     pub fn accept_once<F>(&self, timeout: Duration, handler: F) -> Result<bool, IpcError>
     where
         F: FnOnce(IpcCommand) -> IpcResponse,
@@ -175,17 +158,14 @@ impl IpcServer {
     }
 }
 
-/// Stateless local IPC client for sending a single command to the running daemon.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct IpcClient;
 
 impl IpcClient {
-    /// Sends `command` to `endpoint` with [`DEFAULT_IPC_TIMEOUT`] and returns the response.
     pub fn send_command(endpoint: &Path, command: &IpcCommand) -> Result<IpcResponse, IpcError> {
         Self::send_command_with_timeout(endpoint, command, DEFAULT_IPC_TIMEOUT)
     }
 
-    /// Sends `command` to `endpoint` with an explicit read/write timeout.
     pub fn send_command_with_timeout(
         endpoint: &Path,
         command: &IpcCommand,
@@ -242,7 +222,6 @@ fn read_bounded_line(stream: &mut Stream) -> io::Result<BoundedLine> {
 }
 
 fn configure_stream_timeouts(stream: &Stream, timeout: Duration) {
-    // Windows named pipes return ErrorKind::Unsupported for stream timeouts.
     let _ = stream.set_recv_timeout(Some(timeout));
     let _ = stream.set_send_timeout(Some(timeout));
 }
@@ -399,9 +378,6 @@ mod tests {
 
     #[cfg(unix)]
     fn create_stale_unix_socket(dir: &Path) -> io::Result<PathBuf> {
-        // On macOS, UnixListener::bind sets FD_CLOEXEC after socket(), so a
-        // concurrent test spawning a child process can inherit the fd and keep
-        // the listener alive after drop.
         for attempt in 0..16 {
             let sock = dir.join(format!("s{attempt}.sock"));
             let raw_listener = std::os::unix::net::UnixListener::bind(&sock)?;

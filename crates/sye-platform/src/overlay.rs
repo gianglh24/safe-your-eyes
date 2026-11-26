@@ -1,5 +1,3 @@
-//! On-demand subprocess implementation of `sye_core::OverlayLauncher`.
-
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -7,7 +5,6 @@ use std::process::{Child, Command, Stdio};
 use sye_core::ipc::MAX_IPC_LINE_BYTES;
 use sye_core::{OverlayLauncher, OverlayOutcome, OverlayRequest, PlatformError};
 
-/// Spawns an isolated overlay subprocess and reads its `OverlayOutcome` JSON from stdout.
 #[derive(Debug)]
 pub struct SubprocessOverlayLauncher {
     program: PathBuf,
@@ -16,15 +13,12 @@ pub struct SubprocessOverlayLauncher {
 }
 
 impl SubprocessOverlayLauncher {
-    /// Creates a launcher that invokes the current executable with `--internal-overlay <JSON>`.
     pub fn current_exe() -> Result<Self, PlatformError> {
         let exe = std::env::current_exe().map_err(|err| PlatformError::Io(err.to_string()))?;
-        // Resolve Homebrew Cask symlinks so macOS launches the `.app` bundle executable directly.
         let resolved = exe.canonicalize().unwrap_or(exe);
         Ok(Self::with_command(resolved, Vec::new()))
     }
 
-    /// Creates a launcher with an explicit program and leading arguments (useful for testing).
     #[must_use]
     pub const fn with_command(program: PathBuf, base_args: Vec<String>) -> Self {
         Self {
@@ -34,7 +28,6 @@ impl SubprocessOverlayLauncher {
         }
     }
 
-    /// Returns `true` if an overlay subprocess is currently tracked.
     #[must_use]
     pub const fn is_running(&self) -> bool {
         self.child.is_some()

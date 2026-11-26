@@ -1,9 +1,3 @@
-//! Cross-platform OS adapters for `safe-your-eyes`.
-//!
-//! Provides genuine, lightweight adapters for system clock, system tray (F12), idle and DND
-//! providers (F13), desktop notifications and WAV audio playback (F14), and single-instance local
-//! IPC, OS paths, autostart, and subprocess overlay launching (F15).
-
 #![cfg_attr(
     not(any(target_os = "windows", target_os = "macos")),
     forbid(unsafe_code)

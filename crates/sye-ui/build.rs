@@ -1,6 +1,3 @@
-//! Compiles `assets/icons/hicolor/64x64/apps/safe-your-eyes.png` into a compact RLE-encoded RGBA
-//! table included directly by `sye-ui` (zero runtime image-decoding dependencies).
-
 use std::env;
 use std::error::Error;
 use std::fs::File;

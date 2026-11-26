@@ -1,5 +1,3 @@
-//! TOML configuration schema, defaults, validation, and file I/O.
-
 use std::fmt;
 use std::fs;
 use std::io;
@@ -7,10 +5,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-/// Current supported configuration schema version.
 pub const CONFIG_SCHEMA_VERSION: u32 = 1;
 
-/// Default short break exercises inspired by `SafeEyes` (13 exercises).
 pub const DEFAULT_SHORT_BREAK_NAMES: [&str; 13] = [
     "Gently close your eyes",
     "Take five slow, deep breaths",
@@ -27,7 +23,6 @@ pub const DEFAULT_SHORT_BREAK_NAMES: [&str; 13] = [
     "Have some water",
 ];
 
-/// Default long break exercises inspired by `SafeEyes` (6 exercises).
 pub const DEFAULT_LONG_BREAK_NAMES: [&str; 6] = [
     "Stand up and stretch your back and legs",
     "Lean back at your seat and relax",
@@ -37,7 +32,6 @@ pub const DEFAULT_LONG_BREAK_NAMES: [&str; 6] = [
     "Rest your eyes and focus on distant objects",
 ];
 
-/// Break tier classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BreakType {
@@ -45,7 +39,6 @@ pub enum BreakType {
     Long,
 }
 
-/// Configurable break exercise with optional per-break timing overrides.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BreakSpec {
     pub name: String,
@@ -56,7 +49,6 @@ pub struct BreakSpec {
 }
 
 impl BreakSpec {
-    /// Creates a break specification using tier-default timing.
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self {
@@ -67,7 +59,6 @@ impl BreakSpec {
     }
 }
 
-/// `SmartPause` policy configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SmartPauseConfig {
@@ -86,7 +77,6 @@ impl Default for SmartPauseConfig {
     }
 }
 
-/// `DoNotDisturb` policy configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DoNotDisturbConfig {
@@ -107,7 +97,6 @@ impl Default for DoNotDisturbConfig {
     }
 }
 
-/// Audible alert configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudibleAlertConfig {
@@ -126,7 +115,6 @@ impl Default for AudibleAlertConfig {
     }
 }
 
-/// `LimitConsecutiveSkipping` policy configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SkipLimitConfig {
@@ -143,7 +131,6 @@ impl Default for SkipLimitConfig {
     }
 }
 
-/// Settings window visual theme mode.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemeMode {
@@ -153,7 +140,6 @@ pub enum ThemeMode {
     Dark,
 }
 
-/// Root application configuration serialized to TOML.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -214,7 +200,6 @@ impl Default for Config {
     }
 }
 
-/// Single configuration field validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
     pub field: String,
@@ -229,7 +214,6 @@ impl fmt::Display for ValidationError {
 
 impl std::error::Error for ValidationError {}
 
-/// Errors produced when loading, validating, or saving `Config`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigError {
     Io { message: String },
@@ -266,13 +250,11 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 impl Config {
-    /// Returns a fresh default configuration.
     #[must_use]
     pub fn reset_to_default() -> Self {
         Self::default()
     }
 
-    /// Validates all configuration invariants.
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.schema_version != CONFIG_SCHEMA_VERSION {
             return Err(ConfigError::UnsupportedSchemaVersion {
@@ -334,7 +316,6 @@ impl Config {
         }
     }
 
-    /// Parses and validates a configuration from a TOML string.
     pub fn from_toml_str(input: &str) -> Result<Self, ConfigError> {
         let cfg: Self = toml::from_str(input).map_err(|err| ConfigError::Parse {
             message: err.to_string(),
@@ -343,14 +324,12 @@ impl Config {
         Ok(cfg)
     }
 
-    /// Serializes this configuration to a human-readable TOML string.
     pub fn to_toml_string(&self) -> Result<String, ConfigError> {
         toml::to_string_pretty(self).map_err(|err| ConfigError::Serialize {
             message: err.to_string(),
         })
     }
 
-    /// Loads and validates a configuration file from disk.
     pub fn load_from_path(path: &Path) -> Result<Self, ConfigError> {
         let content = fs::read_to_string(path).map_err(|err| ConfigError::Io {
             message: err.to_string(),
@@ -358,10 +337,6 @@ impl Config {
         Self::from_toml_str(&content)
     }
 
-    /// Loads configuration from `path`, falling back to `Config::default()` if missing or invalid.
-    ///
-    /// Returns `(Config::default(), None)` when the file does not exist, and
-    /// `(Config::default(), Some(err))` when reading, parsing, or validation fails.
     #[must_use]
     pub fn load_or_default(path: &Path) -> (Self, Option<ConfigError>) {
         match fs::read_to_string(path) {
@@ -379,7 +354,6 @@ impl Config {
         }
     }
 
-    /// Writes this configuration to `path`, creating parent directories when needed.
     pub fn save_to_path(&self, path: &Path) -> Result<(), ConfigError> {
         self.validate()?;
         let encoded = self.to_toml_string()?;

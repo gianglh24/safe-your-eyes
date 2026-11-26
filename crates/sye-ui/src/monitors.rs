@@ -1,6 +1,3 @@
-//! Monitor geometry detection and multi-monitor viewport planning for the break overlay.
-
-/// Screen geometry of a single display monitor in logical/virtual desktop coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MonitorRect {
     pub x: f32,
@@ -21,14 +18,12 @@ impl MonitorRect {
     }
 }
 
-/// Planned root (primary) and secondary overlay viewports derived from detected monitors.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct OverlayViewportPlan {
     pub primary: Option<MonitorRect>,
     pub secondaries: Vec<MonitorRect>,
 }
 
-/// Filters invalid monitor rectangles and assigns the primary and secondary overlay viewports.
 #[must_use]
 pub fn plan_overlay_viewports(monitors: &[MonitorRect]) -> OverlayViewportPlan {
     let mut valid: Vec<MonitorRect> = monitors
@@ -49,7 +44,6 @@ pub fn plan_overlay_viewports(monitors: &[MonitorRect]) -> OverlayViewportPlan {
     }
 }
 
-/// Parses `xrandr --listmonitors` stdout into a list of valid `MonitorRect` entries.
 #[must_use]
 pub fn parse_xrandr_monitors(stdout: &str) -> Vec<MonitorRect> {
     let mut monitors = Vec::new();
@@ -118,10 +112,6 @@ fn parse_dimension_px(raw: &str) -> Option<f32> {
     }
 }
 
-/// Detects active monitors on the current desktop environment.
-///
-/// On Linux X11 sessions (when `DISPLAY` is set), queries `xrandr --listmonitors`.
-/// Returns an empty list on any failure or unsupported environment.
 #[must_use]
 pub fn detect_monitors() -> Vec<MonitorRect> {
     #[cfg(target_os = "linux")]

@@ -1,5 +1,3 @@
-//! Cross-platform non-blocking WAV chime playback (`sye_core::AudioPlayer`).
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -16,11 +14,6 @@ struct PlayerSpec {
     args: &'static [&'static str],
 }
 
-/// Non-blocking OS audio player for synthesized WAV chimes.
-///
-/// Writes WAV bytes to a unique temporary file, spawns a platform player (`pw-play`/`paplay`/`aplay`
-/// on Linux, `afplay` on macOS, PowerShell `Media.SoundPlayer` on Windows), and reaps the child +
-/// deletes the temporary file on a background thread.
 #[derive(Debug, Clone)]
 pub struct OsAudioPlayer {
     temp_dir: PathBuf,
@@ -28,13 +21,11 @@ pub struct OsAudioPlayer {
 }
 
 impl OsAudioPlayer {
-    /// Creates an `OsAudioPlayer` using the OS runtime/temp directory and default platform players.
     #[must_use]
     pub fn new() -> Self {
         Self::with_temp_dir(default_audio_temp_dir())
     }
 
-    /// Creates an `OsAudioPlayer` writing temporary WAV files under `temp_dir`.
     #[must_use]
     pub const fn with_temp_dir(temp_dir: PathBuf) -> Self {
         Self {
@@ -48,9 +39,6 @@ impl OsAudioPlayer {
         Self { temp_dir, players }
     }
 
-    /// Synthesizes and plays a pre-break or post-break chime at `volume` (clamped to `0..=100`).
-    ///
-    /// A volume of `0` returns `Ok(())` without writing a file or spawning a process.
     pub fn play_chime(&self, kind: ChimeKind, volume: u8) -> Result<(), PlatformError> {
         let clamped = volume.min(100);
         if clamped == 0 {
@@ -245,7 +233,6 @@ mod tests {
         let tmp = TestTempDir::new("audio-ok")?;
         let player = OsAudioPlayer::with_players(tmp.path().to_path_buf(), TRUE_PLAYER);
 
-        // Volume > 100 must clamp cleanly without error.
         player.play_chime(ChimeKind::PostBreak, 250)?;
 
         let deadline = Instant::now() + Duration::from_secs(3);

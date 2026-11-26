@@ -1,10 +1,3 @@
-//! Pure-Rust core library for `safe-your-eyes`.
-//!
-//! Contains the dual-tier `BreakQueue`, deterministic 7-state `Scheduler`, automatic policies
-//! (`SmartPausePolicy`, `DoNotDisturbPolicy`, `SkipLimitPolicy`), TOML `Config` and
-//! `SessionState`, pure-Rust WAV chime synthesizer, typed NDJSON IPC protocol, and platform
-//! adapter trait boundaries.
-
 pub mod chime;
 pub mod config;
 pub mod ipc;

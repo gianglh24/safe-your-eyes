@@ -1,8 +1,3 @@
-//! Cozy Design System tokens for `safe-your-eyes`.
-//!
-//! Reference: <https://github.com/tunglt1810/cozy> (`v0.2.0` — `tokens/cozy.tokens.json`,
-//! `css/effects.css`, `docs/motion.md`, and `docs/patterns.md`), combined with Astryx layout rules.
-
 use nsh_core::{
     element::{AdaptiveColor, Rgba, rgb, rgba},
     geometry::{Points, px},
@@ -10,10 +5,8 @@ use nsh_core::{
 };
 use sye_core::config::ThemeMode;
 
-/// Author support URL shown in Settings (About & Support) and documentation.
 pub const SUPPORT_URL: &str = "https://buymeacoffee.com/bbeeezzzzz";
 
-/// Maps a persisted `ThemeMode` to an `nsh` `Appearance`.
 pub(crate) const fn appearance_for_theme_mode(mode: ThemeMode) -> Appearance {
     match mode {
         ThemeMode::System => Appearance::System,
@@ -22,7 +15,6 @@ pub(crate) const fn appearance_for_theme_mode(mode: ThemeMode) -> Appearance {
     }
 }
 
-/// Maps an `nsh` `Appearance` back to a persisted `ThemeMode`.
 pub(crate) const fn theme_mode_for_appearance(appearance: Appearance) -> ThemeMode {
     match appearance {
         Appearance::System => ThemeMode::System,
@@ -31,7 +23,6 @@ pub(crate) const fn theme_mode_for_appearance(appearance: Appearance) -> ThemeMo
     }
 }
 
-/// Cycles Cozy theme modes in canonical order: `System -> Light -> Dark -> System`.
 pub(crate) const fn next_theme_mode(mode: ThemeMode) -> ThemeMode {
     match mode {
         ThemeMode::System => ThemeMode::Light,
@@ -40,7 +31,6 @@ pub(crate) const fn next_theme_mode(mode: ThemeMode) -> ThemeMode {
     }
 }
 
-/// Display label for the top-right Cozy theme toggle pill.
 pub(crate) const fn theme_mode_label(mode: ThemeMode) -> &'static str {
     match mode {
         ThemeMode::System => "Theme: System",
@@ -49,7 +39,6 @@ pub(crate) const fn theme_mode_label(mode: ThemeMode) -> &'static str {
     }
 }
 
-/// Pairs light and dark `Rgba` tones into an `AdaptiveColor`.
 const fn tone(light: Rgba, dark: Rgba) -> AdaptiveColor {
     AdaptiveColor {
         light: light.to_hsla(),
@@ -57,64 +46,42 @@ const fn tone(light: Rgba, dark: Rgba) -> AdaptiveColor {
     }
 }
 
-/// Semantic Cozy palette tokens (Light / Dark) from `tunglt1810/cozy` v0.2.0.
 pub(crate) mod colors {
     use super::{AdaptiveColor, rgb, rgba, tone};
 
-    /// Main canvas background (`--cozy-bg-body`: `#FAEBDA` / `#18140E`).
     pub(crate) const BACKGROUND_BODY: AdaptiveColor = tone(rgb(0xFAEBDA), rgb(0x18140E));
-    /// Card, panel, input, secondary button, and sticky toolbar surface (`--cozy-bg-surface`: `#FBF1E1` / `#231D16`).
     pub(crate) const BACKGROUND_SURFACE: AdaptiveColor = tone(rgb(0xFBF1E1), rgb(0x231D16));
-    /// Quiet emphasis surface (`--cozy-bg-muted`: `#F3DFC8` / `#30261D`).
     pub(crate) const BACKGROUND_MUTED: AdaptiveColor = tone(rgb(0xF3DFC8), rgb(0x30261D));
-    /// Switch and progress track (`--cozy-track`: `#E6D2BC` / `#30271E`).
     pub(crate) const TRACK: AdaptiveColor = tone(rgb(0xE6D2BC), rgb(0x30271E));
 
-    /// Floating Sage Sidebar background (`--cozy-nav-bg`: `#C3CBB9` / `#29332A`).
     pub(crate) const SIDEBAR_BG: AdaptiveColor = tone(rgb(0xC3CBB9), rgb(0x29332A));
-    /// Active navigation pill (`--cozy-nav-active`: `#F8E8D3` / `#404A41`).
     pub(crate) const SIDEBAR_ACTIVE: AdaptiveColor = tone(rgb(0xF8E8D3), rgb(0x404A41));
-    /// Navigation label (`--cozy-nav-text`: `#403B26` / `#FFFEF7`).
     pub(crate) const SIDEBAR_TEXT: AdaptiveColor = tone(rgb(0x403B26), rgb(0xFFFEF7));
-    /// Navigation secondary caption & version (`--cozy-nav-text-muted`: `#55503A` / `#B8C4B6`).
     pub(crate) const SIDEBAR_TEXT_MUTED: AdaptiveColor = tone(rgb(0x55503A), rgb(0xB8C4B6));
-    /// Subtle hover layer on any surface (`--cozy-overlay-hover`: `#2611010D` / `#FFFEF70F`).
     pub(crate) const OVERLAY_HOVER: AdaptiveColor = tone(rgba(0x2611010D), rgba(0xFFFEF70F));
 
-    /// Primary coral CTA accent (`--cozy-accent`: `#EF8F63` / `#EE8F64`).
     pub(crate) const ACCENT: AdaptiveColor = tone(rgb(0xEF8F63), rgb(0xEE8F64));
-    /// WCAG AAA dark espresso text on `ACCENT` (`--cozy-on-accent`: `#261101` / `#18140E`).
     pub(crate) const ON_ACCENT: AdaptiveColor = tone(rgb(0x261101), rgb(0x18140E));
-    /// Keyboard focus outline (`--cozy-focus-ring`: `#A84A24` / `#F2A57E`).
     pub(crate) const FOCUS_RING: AdaptiveColor = tone(rgb(0xA84A24), rgb(0xF2A57E));
 
-    /// Warm primary text (`--cozy-text-primary`: `#261101` / `#FFFEF7`).
     pub(crate) const TEXT_PRIMARY: AdaptiveColor = tone(rgb(0x261101), rgb(0xFFFEF7));
-    /// Warm secondary text (`--cozy-text-secondary`: `#5B4C3B` / `#C2B7B1`).
     pub(crate) const TEXT_SECONDARY: AdaptiveColor = tone(rgb(0x5B4C3B), rgb(0xC2B7B1));
-    /// Warm muted/disabled text (`--cozy-text-disabled`: `#968574` / `#70655C`).
     pub(crate) const TEXT_DISABLED: AdaptiveColor = tone(rgb(0x968574), rgb(0x70655C));
 
-    /// Status borders and icons (v0.2.0: light warning `#B87A12` reaches >= 3:1 on body/surface).
     pub(crate) const WARNING: AdaptiveColor = tone(rgb(0xB87A12), rgb(0xF5C156));
     pub(crate) const ERROR: AdaptiveColor = tone(rgb(0xC8433B), rgb(0xF27B70));
-    /// Status banner & destructive chip surfaces and measured high-contrast text pairs.
     pub(crate) const WARNING_SOFT: AdaptiveColor = tone(rgb(0xFAE1B5), rgb(0x443A26));
     pub(crate) const ON_WARNING_MUTED: AdaptiveColor = tone(rgb(0x6B4408), rgb(0xFCE09B));
     pub(crate) const ERROR_SOFT: AdaptiveColor = tone(rgb(0xF9CFC8), rgb(0x472826));
     pub(crate) const ON_ERROR_MUTED: AdaptiveColor = tone(rgb(0x7E211C), rgb(0xF9BEB8));
     pub(crate) const ACCENT_SOFT: AdaptiveColor = tone(rgba(0xEF8F6333), rgba(0xEE8F6438));
-    /// Highlighter stroke under headings (`--cozy-mark-peach`: `#FAD3B9` / `#7D4737`).
     pub(crate) const HEADING_HIGHLIGHT: AdaptiveColor = tone(rgb(0xFAD3B9), rgb(0x7D4737));
 
-    /// Hairline and emphasized borders (`--cozy-border` / `--cozy-border-emphasized`).
     pub(crate) const BORDER: AdaptiveColor = tone(rgba(0x5B4C3B22), rgb(0x3E3831));
     pub(crate) const BORDER_EMPHASIZED: AdaptiveColor = tone(rgb(0xDFCBB5), rgb(0x52493F));
 
-    /// Switch knob color (warm cream).
     pub(crate) const SWITCH_KNOB: AdaptiveColor = tone(rgb(0xFFFEF7), rgb(0xFFFEF7));
 
-    /// Overlay always uses restful dark-roast tones so eyes relax during breaks.
     pub(crate) const OVERLAY_CANVAS: AdaptiveColor = tone(rgb(0x18140E), rgb(0x18140E));
     pub(crate) const OVERLAY_CARD: AdaptiveColor = tone(rgb(0x231D16), rgb(0x231D16));
     pub(crate) const OVERLAY_TEXT: AdaptiveColor = tone(rgb(0xFFFEF7), rgb(0xFFFEF7));
@@ -124,7 +91,6 @@ pub(crate) mod colors {
     pub(crate) const OVERLAY_BORDER_EMPHASIZED: AdaptiveColor = tone(rgb(0x52493F), rgb(0x52493F));
 }
 
-/// Pastel KPI card color pairs (Sage, Peach, Butter, Mist) from `tokens/cozy.tokens.json`.
 pub(crate) mod kpi {
     use super::{AdaptiveColor, rgb, tone};
 
@@ -141,8 +107,6 @@ pub(crate) mod kpi {
     pub(crate) const MIST_ACCENT: AdaptiveColor = tone(rgb(0xA2B3C1), rgb(0x6D8296));
 }
 
-/// Concentric Cozy border-radius scale calibrated to the 16pt native macOS `NSWindow` corner
-/// (titled without `NSToolbar`) with 8pt outer Settings padding.
 pub(crate) mod radii {
     use super::{Points, px};
 
@@ -155,12 +119,10 @@ pub(crate) mod radii {
     pub(crate) const PILL: Points = px(9999.0);
 }
 
-/// Cozy motion presets matching `tunglt1810/cozy` `tokens/cozy.tokens.json` & `docs/motion.md`.
 pub(crate) mod motion {
     use nsh_core::animation::Easing;
     use nsh_core::element::Spring;
 
-    /// `spring.default` (`stiffness: 420, damping: 32, mass: 0.9`) for sliding indicators and switch thumbs.
     pub(crate) const COZY_SPRING: Spring = Spring {
         stiffness: 420.0,
         damping: 32.0,
@@ -169,30 +131,18 @@ pub(crate) mod motion {
         frame_rate: None,
     };
 
-    /// `motion.ease-out` (`cubic-bezier(0.22, 1, 0.36, 1)`).
     pub(crate) const COZY_EASE: Easing = Easing::Bezier(0.22, 1.0, 0.36, 1.0);
-    /// `motion.ease-standard` (`cubic-bezier(0.4, 0, 0.2, 1)`) for theme color transitions.
     pub(crate) const COZY_STANDARD_BEZIER: (f32, f32, f32, f32) = (0.4, 0.0, 0.2, 1.0);
 
-    /// Heading highlighter horizontal sweep duration (`css/effects.css`: 380ms).
     pub(crate) const HIGHLIGHT_SWEEP_MS: f32 = 380.0;
-    /// `motion.duration-page` (200ms): overlay card scale-in and smooth theme color transitions.
     pub(crate) const THEME_COLOR_MS: f32 = 200.0;
-    /// `motion.duration-medium` (260ms): staggered list item entrance (`.cozy-list-row`).
     pub(crate) const ROW_ENTER_MS: f32 = 260.0;
-    /// `@keyframes cozy-row-in` vertical entrance distance (`10px`).
     pub(crate) const ROW_ENTER_Y: f32 = 10.0;
-    /// `motion.stagger-step` (28ms): delay step between consecutive list items (`rowDelayStyle`).
     pub(crate) const ROW_STAGGER_STEP_MS: f32 = 28.0;
-    /// Maximum staggered row index (`rowDelayStyle` `maxRows = 12`) so long lists settle within ~600ms.
     pub(crate) const ROW_STAGGER_MAX_INDEX: usize = 12;
-    /// `motion.duration-fast` (160ms): standard hover/press/focus control transitions.
     pub(crate) const CONTROL_MS: f32 = 160.0;
-    /// `.cozy-press:active` subtle press downscale (`0.97`).
     pub(crate) const PRESS_SCALE: f32 = 0.97;
 
-    /// Returns the Cozy `.cozy-list-row` entrance delay in milliseconds for `index`, capped at
-    /// `ROW_STAGGER_MAX_INDEX * ROW_STAGGER_STEP_MS`.
     pub(crate) fn row_stagger_delay_ms(index: usize) -> f32 {
         (index.min(ROW_STAGGER_MAX_INDEX) as f32) * ROW_STAGGER_STEP_MS
     }

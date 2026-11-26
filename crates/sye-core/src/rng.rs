@@ -1,19 +1,14 @@
-//! Minimal deterministic PRNG (`SplitMix64`) for `BreakQueue` shuffling.
-
-/// Deterministic 64-bit `SplitMix64` pseudo-random number generator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SplitMix64 {
     state: u64,
 }
 
 impl SplitMix64 {
-    /// Creates a new generator from an explicit seed.
     #[must_use]
     pub(crate) const fn new(seed: u64) -> Self {
         Self { state: seed }
     }
 
-    /// Generates the next pseudo-random `u64`.
     pub(crate) const fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.state;
@@ -22,7 +17,6 @@ impl SplitMix64 {
         z ^ (z >> 31)
     }
 
-    /// Shuffles `slice` in place using the Fisher-Yates algorithm.
     pub(crate) fn shuffle<T>(&mut self, slice: &mut [T]) {
         if slice.len() <= 1 {
             return;

@@ -1,5 +1,3 @@
-//! Cross-platform system tray adapter using `tray-icon` (pure-Rust `ksni` on Linux).
-
 use std::fmt;
 use std::sync::mpsc::Sender;
 
@@ -22,7 +20,6 @@ const MENU_ID_TAKE_LONG: &str = "sye.take.long";
 const MENU_ID_SETTINGS: &str = "sye.settings";
 const MENU_ID_QUIT: &str = "sye.quit";
 
-/// Visual state of the system tray eye icon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayIconState {
     Enabled,
@@ -30,7 +27,6 @@ pub enum TrayIconState {
     PreBreak,
 }
 
-/// User actions emitted from system tray menu clicks and OS app reopen events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayEvent {
     Enable,
@@ -59,7 +55,6 @@ struct ActiveTray {
     quit_item: MenuItem,
 }
 
-/// Handle to the OS system tray icon and menu, with graceful headless degradation.
 pub struct TrayHandle {
     active: Option<ActiveTray>,
 }
@@ -73,9 +68,6 @@ impl fmt::Debug for TrayHandle {
 }
 
 impl TrayHandle {
-    /// Attempts to create and register the OS system tray icon and menu.
-    ///
-    /// Returns `Err(PlatformError::Unavailable(_))` when no tray host or display server is active.
     pub fn try_new(initial: &TraySnapshot, tx: Sender<TrayEvent>) -> Result<Self, PlatformError> {
         #[cfg(target_os = "macos")]
         if std::thread::current().name() != Some("main") {
@@ -203,19 +195,16 @@ impl TrayHandle {
         Ok(handle)
     }
 
-    /// Creates a no-op tray handle for headless mode or environments without a tray host.
     #[must_use]
     pub const fn unavailable() -> Self {
         Self { active: None }
     }
 
-    /// Returns `true` if a live OS tray icon is registered.
     #[must_use]
     pub const fn is_available(&self) -> bool {
         self.active.is_some()
     }
 
-    /// Refreshes the tray icon, tooltip, status label, and menu item enabled states.
     pub fn update(&mut self, snapshot: &TraySnapshot) -> Result<(), PlatformError> {
         let Some(active) = self.active.as_mut() else {
             return Ok(());
@@ -461,7 +450,6 @@ mod macos_hover_tooltip {
             window.setBackgroundColor(Some(&NSColor::clearColor()));
             window.setHasShadow(true);
             window.setIgnoresMouseEvents(true);
-            // macOS 26+ animates `Default` borderless popups with an underdamped spring bounce.
             window.setAnimationBehavior(NSWindowAnimationBehavior::None);
             window.setLevel(NSStatusWindowLevel + 1);
             window.setCollectionBehavior(
@@ -605,7 +593,6 @@ mod macos_hover_tooltip {
             let Some(mtm) = MainThreadMarker::new() else {
                 return;
             };
-            // Menu tracking blocks the daemon loop, so `poll` never sees the click that opened it.
             if self.menu_opened.replace(false) {
                 self.gate = HoverGate::default();
             }
@@ -613,7 +600,6 @@ mod macos_hover_tooltip {
                 let (icon_frame, screen_frame) = status_item_frames(tray_icon, mtm);
                 let cursor = NSEvent::mouseLocation();
                 let pressed = NSEvent::pressedMouseButtons() != 0;
-                // The break overlay covers the menu bar at a lower window level than the tooltip.
                 let hovered = snapshot.state != SchedulerState::Break
                     && is_status_item_hovered(
                         (cursor.x, cursor.y),
@@ -729,8 +715,6 @@ mod macos_menu_timer {
                 status_item,
             }));
             let timer_state = Rc::clone(&state);
-            // AppKit enters modal `NSEventTrackingRunLoopMode` while the status bar menu is open,
-            // pausing `daemon.rs`'s main loop; this timer keeps the countdown label ticking live.
             let timer = autoreleasepool(|_| {
                 let block = RcBlock::new(move |_timer: NonNull<NSTimer>| {
                     if let Ok(mut panel) = tooltip_panel.try_borrow_mut() {
@@ -781,7 +765,6 @@ mod macos_menu_timer {
     }
 }
 
-/// Maps a `TraySnapshot` to its corresponding `TrayIconState`.
 #[must_use]
 pub const fn icon_state_for_snapshot(snapshot: &TraySnapshot) -> TrayIconState {
     if !snapshot.enabled {
@@ -796,7 +779,6 @@ pub const fn icon_state_for_snapshot(snapshot: &TraySnapshot) -> TrayIconState {
     }
 }
 
-/// Maps a tray menu item ID to a strongly-typed `TrayEvent`.
 #[must_use]
 pub fn map_menu_id_to_event(id: &str) -> Option<TrayEvent> {
     match id {
@@ -819,7 +801,6 @@ pub fn map_menu_id_to_event(id: &str) -> Option<TrayEvent> {
     }
 }
 
-/// Formats the top status menu line for the system tray.
 #[must_use]
 pub fn format_status_label(snapshot: &TraySnapshot) -> String {
     if !snapshot.has_breaks {
@@ -856,23 +837,18 @@ pub fn format_status_label(snapshot: &TraySnapshot) -> String {
     }
 }
 
-/// Formats the hover tooltip text for tray hosts that use hover tooltips.
 #[must_use]
 pub fn format_tooltip(snapshot: &TraySnapshot) -> String {
     format!("Safe Your Eyes — {}", format_status_label(snapshot))
 }
 
-/// Returns the tray hover tooltip for the current OS (`None` on macOS).
 #[must_use]
 pub fn tray_tooltip(snapshot: &TraySnapshot) -> Option<String> {
     tray_tooltip_for_platform(snapshot, cfg!(target_os = "macos"))
 }
 
-/// Returns `None` on macOS and `Some(format_tooltip(snapshot))` on other platforms.
 #[must_use]
 pub fn tray_tooltip_for_platform(snapshot: &TraySnapshot, is_macos: bool) -> Option<String> {
-    // AppKit's `NSToolTipManager` on macOS 27 can leave the `NSStatusItem` tooltip window stuck
-    // after sleep/wake or brief menu bar passes and moves it to the cursor on `setToolTip:`.
     (!is_macos).then(|| format_tooltip(snapshot))
 }
 
@@ -881,16 +857,11 @@ fn build_tray_icon(state: TrayIconState) -> Result<Icon, PlatformError> {
     Icon::from_rgba(rgba, width, height).map_err(|err| PlatformError::Io(err.to_string()))
 }
 
-/// Returns the platform-appropriate 64x64 RGBA tray icon for the given `TrayIconState`.
-///
-/// Uses monochrome template icons on macOS and Cozy colored icons on Linux and Windows.
 #[must_use]
 pub fn render_eye_icon_rgba(state: TrayIconState) -> (Vec<u8>, u32, u32) {
     render_tray_icon_rgba(state, cfg!(target_os = "macos"))
 }
 
-/// Returns the 64x64 RGBA tray icon for `state`, choosing either the monochrome macOS template
-/// variant (`template == true`) or the Cozy colored variant (`template == false`).
 #[must_use]
 pub fn render_tray_icon_rgba(state: TrayIconState, template: bool) -> (Vec<u8>, u32, u32) {
     let encoded = match (template, state) {
@@ -1132,28 +1103,24 @@ mod tests {
             height: 24.0,
         };
 
-        // Cursor inside icon with no mouse buttons pressed -> hovered.
         assert!(is_status_item_hovered(
             (1334.0, 970.0),
             Some(icon),
             Some(screen),
             false
         ));
-        // Cursor down in editor/Dock -> not hovered.
         assert!(!is_status_item_hovered(
             (700.0, 220.0),
             Some(icon),
             Some(screen),
             false
         ));
-        // Mouse button pressed (opening menu) -> not hovered.
         assert!(!is_status_item_hovered(
             (1334.0, 970.0),
             Some(icon),
             Some(screen),
             true
         ));
-        // Auto-hidden menu bar slid above screen top -> not hovered.
         let hidden_icon = ScreenRect { y: 990.0, ..icon };
         assert!(!is_status_item_hovered(
             (1334.0, 995.0),
@@ -1162,7 +1129,6 @@ mod tests {
             false
         ));
 
-        // Brief pass (< 500ms) never opens tooltip; continuous hover >= 500ms opens, leaving resets.
         let mut gate = HoverGate::default();
         let t0 = Instant::now();
         assert!(!gate.evaluate(true, t0));
@@ -1172,7 +1138,6 @@ mod tests {
         assert!(gate.evaluate(true, t0 + Duration::from_millis(1100)));
         assert!(!gate.evaluate(false, t0 + Duration::from_millis(1125)));
 
-        // Tooltip anchors centered below `icon_frame` (never at cursor) and clamps to screen right edge.
         assert_eq!(
             compute_macos_tooltip_origin(icon, Some(screen), (240.0, 26.0)),
             (1214.0, 926.0)

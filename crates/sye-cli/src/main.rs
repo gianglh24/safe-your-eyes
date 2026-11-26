@@ -1,5 +1,3 @@
-//! Single-binary entry point for `safe-your-eyes`.
-
 mod cli;
 mod daemon;
 
@@ -138,8 +136,6 @@ fn run_internal_overlay(payload_json: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // nsh on Windows ends the process inside `run_app`, so `run_overlay_with_hook` never returns
-    // there: the outcome must be written from the hook.
     let written = Arc::new(AtomicBool::new(false));
     let hook_written = Arc::clone(&written);
     let on_outcome: sye_ui::OverlayOutcomeCallback = Arc::new(move |outcome| {

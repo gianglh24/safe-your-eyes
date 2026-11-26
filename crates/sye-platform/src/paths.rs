@@ -1,5 +1,3 @@
-//! Cross-platform application path resolution (config, session, IPC socket).
-
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
@@ -7,7 +5,6 @@ use sye_core::PlatformError;
 
 const APP_DIR_NAME: &str = "safe-your-eyes";
 
-/// Resolved filesystem paths used by `safe-your-eyes`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
     pub config_file: PathBuf,
@@ -16,7 +13,6 @@ pub struct AppPaths {
 }
 
 impl AppPaths {
-    /// Resolves default OS-standard paths for `safe-your-eyes`.
     pub fn resolve() -> Result<Self, PlatformError> {
         let proj = ProjectDirs::from("", "", APP_DIR_NAME).ok_or_else(|| {
             PlatformError::Unavailable("unable to determine user home directory".to_owned())
@@ -33,10 +29,6 @@ impl AppPaths {
         })
     }
 
-    /// Resolves paths while applying optional CLI overrides for `--config` and `--socket`.
-    ///
-    /// When `config_override` is supplied, `session_file` is placed alongside the overridden
-    /// config file so isolated runs never touch the user's real session file.
     pub fn with_overrides(
         config_override: Option<PathBuf>,
         socket_override: Option<PathBuf>,
@@ -65,7 +57,6 @@ impl AppPaths {
     }
 }
 
-/// Computes a sibling `session.toml` path next to an overridden config file.
 #[must_use]
 pub fn session_path_for_config(config_path: &Path) -> PathBuf {
     match config_path.parent() {

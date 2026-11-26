@@ -1,11 +1,3 @@
-//! Cozy Settings window view model and Native Shell (`nsh`) renderer.
-//!
-//! Applies the Cozy Design System (<https://github.com/tunglt1810/cozy>) with Astryx layout rules:
-//! seamless themed hidden titlebar, Floating Sage Sidebar with spring indicator, top-right Cozy
-//! theme switcher with smooth color transitions, staggered list-item entrances on tab switch,
-//! Pastel KPI summary cards, unified rounded Form Card with clipped sticky toolbar, and author
-//! support link.
-
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -38,7 +30,6 @@ use nsh_platform_macos as platform;
 #[cfg(target_os = "windows")]
 use nsh_platform_windows as platform;
 
-/// Active section in the Cozy settings window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     Timing,
@@ -60,14 +51,12 @@ impl SettingsTab {
     }
 }
 
-/// Terminal outcome returned by the settings window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsOutcome {
     Saved,
     Cancelled,
 }
 
-/// Pure, headless view model managing configuration editing, validation, and persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsViewModel {
     pub config_path: PathBuf,
@@ -84,8 +73,6 @@ pub struct SettingsViewModel {
 }
 
 impl SettingsViewModel {
-    /// Loads configuration from `config_path`, falling back to defaults with a non-fatal warning
-    /// if the existing file is unreadable or invalid.
     #[must_use]
     pub fn load(config_path: PathBuf) -> Self {
         let (mut config, load_err) = Config::load_or_default(&config_path);
@@ -107,7 +94,6 @@ impl SettingsViewModel {
         }
     }
 
-    /// Appends a new break exercise to the chosen break tier.
     pub fn add_exercise(&mut self, kind: BreakType, name: &str) -> Result<(), String> {
         let trimmed = name.trim();
         if trimmed.is_empty() {
@@ -118,8 +104,6 @@ impl SettingsViewModel {
         Ok(())
     }
 
-    /// Removes the break exercise at `index`, refusing to remove the last remaining exercise
-    /// across both short and long tiers.
     pub fn remove_exercise(&mut self, kind: BreakType, index: usize) -> Result<(), String> {
         let total = self.config.short_breaks.len() + self.config.long_breaks.len();
         if total <= 1 {
@@ -134,7 +118,6 @@ impl SettingsViewModel {
         Ok(())
     }
 
-    /// Updates the optional per-exercise interval override.
     pub fn set_exercise_interval_override(
         &mut self,
         kind: BreakType,
@@ -146,7 +129,6 @@ impl SettingsViewModel {
         Ok(())
     }
 
-    /// Updates the optional per-exercise duration override.
     pub fn set_exercise_duration_override(
         &mut self,
         kind: BreakType,
@@ -158,28 +140,22 @@ impl SettingsViewModel {
         Ok(())
     }
 
-    /// Adds a non-empty window pattern to `do_not_disturb.skip_break_windows`.
     pub fn add_skip_window(&mut self, pattern: &str) -> Result<(), String> {
         self.add_window_pattern(WindowList::Skip, pattern)
     }
 
-    /// Removes the pattern at `index` from `do_not_disturb.skip_break_windows`.
     pub fn remove_skip_window(&mut self, index: usize) -> Result<(), String> {
         self.remove_window_pattern(WindowList::Skip, index)
     }
 
-    /// Adds a non-empty window pattern to `do_not_disturb.take_break_windows`.
     pub fn add_take_window(&mut self, pattern: &str) -> Result<(), String> {
         self.add_window_pattern(WindowList::Take, pattern)
     }
 
-    /// Removes the pattern at `index` from `do_not_disturb.take_break_windows`.
     pub fn remove_take_window(&mut self, index: usize) -> Result<(), String> {
         self.remove_window_pattern(WindowList::Take, index)
     }
 
-    /// Enables or disables `strict_break`, automatically disabling `limit_consecutive_skips`
-    /// whenever strict mode hides the Skip control.
     pub const fn set_strict_break(&mut self, enabled: bool) {
         self.config.strict_break = enabled;
         if enabled {
@@ -187,15 +163,12 @@ impl SettingsViewModel {
         }
     }
 
-    /// Enables or disables `limit_consecutive_skips` when `strict_break` is inactive.
     pub const fn set_limit_consecutive_skips(&mut self, enabled: bool) {
         if !self.config.strict_break {
             self.config.limit_consecutive_skips.enabled = enabled;
         }
     }
 
-    /// Persists only `config.theme` to `config_path` so closing Settings preserves the active
-    /// theme without writing unsaved form edits. Skips writing if an existing file is invalid.
     pub fn persist_theme(&self) -> Result<(), String> {
         let (mut on_disk, load_err) = Config::load_or_default(&self.config_path);
         if load_err.is_some() {
@@ -215,7 +188,6 @@ impl SettingsViewModel {
             .map_err(|err| err.to_string())
     }
 
-    /// Validates the current in-memory configuration and updates `validation_error`.
     pub fn validate(&mut self) -> Result<(), String> {
         if let Err(err) = self.config.validate() {
             return self.fail_validation(err.to_string());
@@ -227,7 +199,6 @@ impl SettingsViewModel {
         Ok(())
     }
 
-    /// Resets the in-memory configuration and drafts to factory defaults without writing to disk.
     pub fn reset_to_defaults(&mut self) {
         self.config = Config::reset_to_default();
         self.validation_error = None;
@@ -238,7 +209,6 @@ impl SettingsViewModel {
         self.draft_take_window.clear();
     }
 
-    /// Validates and persists the configuration to `config_path`.
     pub fn save(&mut self) -> Result<SettingsOutcome, String> {
         if self.config.strict_break {
             self.config.limit_consecutive_skips.enabled = false;
@@ -253,19 +223,16 @@ impl SettingsViewModel {
         Ok(SettingsOutcome::Saved)
     }
 
-    /// Cancels editing without writing unsaved form edits to disk.
     pub fn cancel(&mut self) -> SettingsOutcome {
         self.outcome = Some(SettingsOutcome::Cancelled);
         SettingsOutcome::Cancelled
     }
 
-    /// Returns `true` when the settings window should close.
     #[must_use]
     pub const fn should_close(&self) -> bool {
         self.outcome.is_some()
     }
 
-    /// Returns the latched outcome, defaulting to `SettingsOutcome::Cancelled`.
     #[must_use]
     pub const fn resolved_outcome(&self) -> SettingsOutcome {
         match self.outcome {
@@ -353,7 +320,6 @@ impl WindowList {
     }
 }
 
-/// Callback invoked whenever the launch-at-login setting changes in the Settings UI.
 pub type AutostartChangeCallback = Box<dyn Fn(bool) + Send + Sync>;
 
 type AutostartHook = Arc<dyn Fn(bool) + Send + Sync>;
@@ -905,14 +871,12 @@ fn about_section(animate: bool) -> impl IntoElement {
     )
 }
 
-/// Builds the `MainWindowOptions` with a seamless themed hidden titlebar.
 fn settings_main_window_options() -> MainWindowOptions {
     let mut tb = TitleBarOptions::default();
     tb.style = TitleBarStyle::Hidden;
     tb.height = Some(px(36.0));
     #[cfg(target_os = "macos")]
     {
-        // Aligns macOS traffic lights cleanly inside the top-left of the Floating Sage Sidebar.
         tb.controls_offset = Some(point(px(20.0), px(18.0)));
     }
     let mut main_window = MainWindowOptions::default();
@@ -920,7 +884,6 @@ fn settings_main_window_options() -> MainWindowOptions {
     main_window
 }
 
-/// Builds the Cozy Settings UI surface for headless tests without OS hooks.
 #[cfg(test)]
 pub(crate) fn build_settings_view(
     initial_vm: SettingsViewModel,
@@ -958,8 +921,6 @@ pub(crate) fn build_settings_view_with_hooks(
                     hook(initial_autostart);
                 }
             });
-            // `Engine::drop` tears down the worker thread without disposing the root `Owner`,
-            // so `on_app_quit` covers window close/`quit()` while `cleanup` covers scope disposal.
             let quit_revert = Arc::clone(&revert_if_unsaved);
             on_app_quit(move || {
                 quit_revert();
@@ -973,8 +934,6 @@ pub(crate) fn build_settings_view_with_hooks(
     };
 
     if quit_on_finish {
-        // macOS ignores `NSApplication::activate()` after tray menu dismissal unless `Focus`
-        // triggers `Activation::Take` both on initial commit and after AppKit finishes menu tracking.
         let main_win = current_window();
         main_win.focus();
         let focus_win = main_win;
@@ -1272,7 +1231,6 @@ pub(crate) fn build_settings_view_with_hooks(
             }
         }));
 
-    // Unified Form Card keeps the scrollable form and sticky footer strictly inside one rounded border.
     let form_card = view()
         .flex_1()
         .rounded(radii::CONTAINER)
@@ -1286,7 +1244,6 @@ pub(crate) fn build_settings_view_with_hooks(
         .child(form_scroll)
         .child(sticky_toolbar);
 
-    // Reserve top drag clearance on Windows/Linux where native caption buttons occupy top-right.
     let right_pane = view()
         .flex_1()
         .gap_3()
@@ -1336,12 +1293,10 @@ fn SettingsRoot() -> impl IntoElement {
     }
 }
 
-/// Runs the Cozy Settings window using Native Shell (`nsh`) and returns `SettingsOutcome`.
 pub fn run_settings(config_path: PathBuf) -> Result<SettingsOutcome, UiError> {
     run_settings_with_autostart(config_path, None, None)
 }
 
-/// Runs the Cozy Settings window with live OS login-item synchronization.
 pub fn run_settings_with_autostart(
     config_path: PathBuf,
     system_autostart: Option<bool>,
@@ -1366,7 +1321,6 @@ pub fn run_settings_with_autostart(
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     {
-        // Set saved theme on Root (not AppOptions) so Core keeps real OS color_scheme in system_dark.
         let root = platform::Root::of::<SettingsRoot>()
             .appearance(initial_appearance)
             .main_window(settings_main_window_options());
@@ -1688,7 +1642,6 @@ mod tests {
         assert!(app.shows("Launch at login (startup)"));
         assert!(app.shows("Theme: System"));
 
-        // Cycle top-right theme button on Timing tab: System -> Light -> Dark -> System.
         app.press("Theme: System")?;
         app.wait_for("Theme: Light")?;
         app.press("Theme: Light")?;
@@ -1696,7 +1649,6 @@ mod tests {
         app.press("Theme: Dark")?;
         app.wait_for("Theme: System")?;
 
-        // Navigate to Policies and toggle a cozy_switch.
         app.press("Policies")?;
         app.wait_for("Break Enforcement")?;
         assert!(!app.shows("Settings"));
@@ -1704,12 +1656,10 @@ mod tests {
         app.press("Strict break (hide Skip)")?;
         app.wait_for("Strict")?;
 
-        // Navigate to Exercises.
         app.press("Exercises")?;
         app.wait_for("Short Break Exercises")?;
         assert!(app.shows("Theme: System"));
 
-        // Navigate to About & Support: no duplicate Cozy Appearance section, support card intact.
         app.press("About & Support")?;
         app.wait_for("Buy Me a Coffee")?;
         assert!(!app.shows("Cozy Appearance"));
@@ -1744,7 +1694,6 @@ mod tests {
             build_settings_view(vm, sink, false)
         }
 
-        // Cycle System -> Light -> Dark, Reset back to System, then cycle to Light and Save.
         if let Ok(mut guard) = TEST_PATH.lock() {
             *guard = Some(save_path.clone());
         }
@@ -1785,8 +1734,6 @@ mod tests {
         assert_eq!(reloaded.theme, ThemeMode::Light);
         assert!(reloaded.strict_break);
 
-        // Toggle theme, make an unsaved form edit, then close/Cancel:
-        // theme must be persisted while the unsaved form edit is discarded.
         if let Ok(mut guard) = TEST_PATH.lock() {
             *guard = Some(cancel_path.clone());
         }
@@ -1859,16 +1806,13 @@ mod tests {
         app.wait_for("Break Enforcement")?;
         assert!(app.shows("Off"));
 
-        // Enable skip limit -> KPI shows "2 max".
         app.press("Limit consecutive skips")?;
         app.wait_for("2 max")?;
 
-        // Enable strict break -> auto-disables skip limit and KPI switches to "Strict".
         app.press("Strict break (hide Skip)")?;
         app.wait_for("Strict")?;
         assert!(!app.shows("2 max"));
 
-        // Save and verify persisted config has strict_break=true and limit_consecutive_skips=false.
         app.press("Save")?;
         let saved = Config::load_from_path(&path)?;
         assert!(saved.strict_break);
@@ -1958,7 +1902,6 @@ mod tests {
         });
 
         app.wait_for("Break Schedule")?;
-        // Cozy motion rule: do not animate list items on initial window load.
         assert!(
             observed_delays
                 .lock()
@@ -2065,7 +2008,6 @@ mod tests {
             "Saved Dark config must render dark on startup"
         );
 
-        // Cycle Dark -> System on default Light OS: must emit Appearance::System and flip dark() to false.
         app.press("Theme: Dark")?;
         app.wait_for("Theme: System")?;
         app.settle();
@@ -2083,7 +2025,6 @@ mod tests {
             "Expected MountItem::Appearance(System) after Dark -> System, got {seen:?}"
         );
 
-        // Cycle back to Dark, then Reset -> must flip dark() back to false again.
         app.press("Theme: System")?;
         app.wait_for("Theme: Light")?;
         app.press("Theme: Light")?;
@@ -2177,10 +2118,8 @@ mod tests {
         .map_err(|e| e.to_string())?;
         app.wait_for("Launch at login (startup)")?;
 
-        // Initial `system_autostart = Some(true)` overrode saved `false`, so first toggle flips to `false`.
         app.press("Launch at login (startup)")?;
         app.press("Launch at login (startup)")?;
-        // Now `autostart` is `true`; pressing `Reset` restores default `false` and fires callback.
         app.press("Reset")?;
         app.press("Launch at login (startup)")?;
         app.press("Save")?;

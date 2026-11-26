@@ -1,5 +1,3 @@
-//! Fullscreen break overlay view model and Native Shell (`nsh`) Cozy renderer.
-
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,20 +22,17 @@ use nsh_platform_macos as platform;
 #[cfg(target_os = "windows")]
 use nsh_platform_windows as platform;
 
-/// Supported keyboard shortcuts on the break overlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayKey {
     Escape,
     Space,
 }
 
-/// Formats a non-negative number of seconds as `MM:SS` without overflow.
 #[must_use]
 pub fn format_mm_ss(total_secs: u64) -> String {
     format!("{:02}:{:02}", total_secs / 60, total_secs % 60)
 }
 
-/// Pure, deterministic view model driving the fullscreen break overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OverlayViewModel {
     request: OverlayRequest,
@@ -46,7 +41,6 @@ pub struct OverlayViewModel {
 }
 
 impl OverlayViewModel {
-    /// Creates a new overlay view model at `elapsed = 0`.
     #[must_use]
     pub const fn new(request: OverlayRequest) -> Self {
         Self {
@@ -56,51 +50,43 @@ impl OverlayViewModel {
         }
     }
 
-    /// Returns the underlying `OverlayRequest`.
     #[must_use]
     pub const fn request(&self) -> &OverlayRequest {
         &self.request
     }
 
-    /// Returns the elapsed duration since the overlay opened.
     #[must_use]
     pub const fn elapsed(&self) -> Duration {
         self.elapsed
     }
 
-    /// Advances elapsed time by `delta` (saturating) and latches completion when reached.
     pub fn tick(&mut self, delta: Duration) -> Option<&OverlayOutcome> {
         self.elapsed = self.elapsed.saturating_add(delta);
         self.check_completion();
         self.outcome.as_ref()
     }
 
-    /// Monotonically updates elapsed time and latches completion when reached.
     pub fn update_elapsed(&mut self, elapsed: Duration) -> Option<&OverlayOutcome> {
         self.elapsed = self.elapsed.max(elapsed);
         self.check_completion();
         self.outcome.as_ref()
     }
 
-    /// Remaining break duration (saturating at zero).
     #[must_use]
     pub const fn remaining(&self) -> Duration {
         Duration::from_secs(self.request.duration_secs).saturating_sub(self.elapsed)
     }
 
-    /// Remaining seconds rounded up so `15s` displays `00:15` until a full second passes.
     #[must_use]
     pub const fn remaining_secs_ceil(&self) -> u64 {
         duration_secs_ceil(self.remaining())
     }
 
-    /// Remaining countdown formatted as `MM:SS`.
     #[must_use]
     pub fn formatted_remaining(&self) -> String {
         format_mm_ss(self.remaining_secs_ceil())
     }
 
-    /// Fade-in opacity factor in `0.0..=1.0`.
     #[must_use]
     pub fn fade_in_alpha(&self) -> f32 {
         if self.request.fade_in_ms == 0 {
@@ -110,7 +96,6 @@ impl OverlayViewModel {
         (self.elapsed.as_secs_f64() / fade_secs).clamp(0.0, 1.0) as f32
     }
 
-    /// Completion progress in `0.0..=1.0`.
     #[must_use]
     pub fn progress(&self) -> f32 {
         if self.request.duration_secs == 0 {
@@ -119,13 +104,11 @@ impl OverlayViewModel {
         (self.elapsed.as_secs_f64() / self.request.duration_secs as f64).clamp(0.0, 1.0) as f32
     }
 
-    /// Returns `true` while accidental-input shortcut protection is still active.
     #[must_use]
     pub fn is_shortcut_locked(&self) -> bool {
         self.elapsed < Duration::from_secs(self.request.shortcut_disable_secs)
     }
 
-    /// Remaining shortcut-lock seconds (rounded up).
     #[must_use]
     pub const fn lock_remaining_secs(&self) -> u64 {
         duration_secs_ceil(
@@ -133,31 +116,26 @@ impl OverlayViewModel {
         )
     }
 
-    /// Whether the Skip control should be shown.
     #[must_use]
     pub const fn show_skip_button(&self) -> bool {
         !self.request.strict_break
     }
 
-    /// Whether skipping is currently permitted.
     #[must_use]
     pub fn can_skip(&self) -> bool {
         self.outcome.is_none() && !self.request.strict_break && !self.is_shortcut_locked()
     }
 
-    /// Whether the Postpone control should be shown.
     #[must_use]
     pub const fn show_postpone_button(&self) -> bool {
         self.request.allow_postpone
     }
 
-    /// Whether postponing is currently permitted.
     #[must_use]
     pub fn can_postpone(&self) -> bool {
         self.outcome.is_none() && self.request.allow_postpone && !self.is_shortcut_locked()
     }
 
-    /// Optional non-empty trimmed status note to display on the overlay.
     #[must_use]
     pub fn status_note(&self) -> Option<&str> {
         self.request
@@ -167,7 +145,6 @@ impl OverlayViewModel {
             .filter(|s| !s.is_empty())
     }
 
-    /// Attempts to latch `OverlayOutcome::Skipped` if skipping is currently allowed.
     pub fn trigger_skip(&mut self) -> Option<&OverlayOutcome> {
         if self.can_skip() {
             self.outcome = Some(OverlayOutcome::Skipped);
@@ -175,7 +152,6 @@ impl OverlayViewModel {
         self.outcome.as_ref()
     }
 
-    /// Attempts to latch `OverlayOutcome::Postponed` if postponing is currently allowed.
     pub fn trigger_postpone(&mut self) -> Option<&OverlayOutcome> {
         if self.can_postpone() {
             self.outcome = Some(OverlayOutcome::Postponed {
@@ -185,7 +161,6 @@ impl OverlayViewModel {
         self.outcome.as_ref()
     }
 
-    /// Dispatches a keyboard shortcut.
     pub fn handle_key(&mut self, key: OverlayKey) -> Option<&OverlayOutcome> {
         match key {
             OverlayKey::Escape => self.trigger_skip(),
@@ -193,7 +168,6 @@ impl OverlayViewModel {
         }
     }
 
-    /// Latches `OverlayOutcome::Closed` if no other outcome has been latched yet.
     pub fn trigger_external_close(&mut self) -> Option<&OverlayOutcome> {
         if self.outcome.is_none() {
             self.outcome = Some(OverlayOutcome::Closed);
@@ -201,19 +175,16 @@ impl OverlayViewModel {
         self.outcome.as_ref()
     }
 
-    /// Returns `true` once a terminal outcome has been latched.
     #[must_use]
     pub const fn should_close(&self) -> bool {
         self.outcome.is_some()
     }
 
-    /// Returns the latched outcome, if any.
     #[must_use]
     pub const fn outcome(&self) -> Option<&OverlayOutcome> {
         self.outcome.as_ref()
     }
 
-    /// Returns the latched outcome or `OverlayOutcome::Closed` if closed before latching.
     #[must_use]
     pub const fn resolved_outcome(&self) -> OverlayOutcome {
         match self.outcome {
@@ -238,10 +209,8 @@ const fn duration_secs_ceil(rem: Duration) -> u64 {
     }
 }
 
-/// Called once the break overlay window is shown and focused.
 pub type OverlayShownCallback = Box<dyn Fn() + Send>;
 
-/// Called once with the break outcome, before the overlay quits.
 pub type OverlayOutcomeCallback = Arc<dyn Fn(OverlayOutcome) + Send + Sync>;
 
 struct OverlayLaunch {
@@ -268,10 +237,8 @@ fn overlay_main_window_options_for_primary(
     attrs.focusable = Some(true);
     attrs.activate = Some(true);
     attrs.close_on_press = Some(false);
-    // Explorer lowers the taskbar only for a full-screen window that has a taskbar button.
     attrs.taskbar = Some(cfg!(target_os = "windows"));
     attrs.shadow = Some(false);
-    // An opaque window fades from its clear color (white or near black), not from the desktop.
     attrs.transparent = Some(true);
 
     let mut main_window = MainWindowOptions::default();
@@ -334,7 +301,6 @@ fn secondary_window_attributes() -> WindowAttributes {
 
 const PROGRESS_TRACK_W: f32 = 360.0;
 
-/// Values of one window's entrance. Each window has its own: the engine animates per surface.
 #[derive(Clone, Copy)]
 struct Entrance {
     fade: AnimatedValue,
@@ -352,8 +318,6 @@ impl Entrance {
         }
     }
 
-    /// Starts the animations once the window is on screen. The engine clocks an animation from
-    /// its first frame, and frames drawn before the window is shown and sized are lost.
     fn play(&self, vm: Signal<OverlayViewModel>) {
         let (alpha, fade_ms, progress, remaining) = vm.with(|m| {
             (
@@ -375,8 +339,6 @@ impl Entrance {
                 crate::theme::motion::COZY_EASE,
             );
         }
-        // One animation for the whole break: width does not animate per frame, and a
-        // transition restarted at each tick stutters.
         self.progress_x.set(progress_offset(progress));
         if progress < 1.0 {
             let _ = self
@@ -552,7 +514,6 @@ fn build_overlay_card(
     .child(actions_row)
 }
 
-/// Builds the Cozy break overlay surface for both desktop runs and headless tests.
 pub(crate) fn build_overlay_view(
     request: OverlayRequest,
     outcome_sink: Arc<Mutex<Option<OverlayOutcome>>>,
@@ -576,9 +537,7 @@ pub(crate) fn build_overlay_view(
         }
     };
 
-    // Drive fade-in and countdown ticks on the NSH engine clock (supports Clock::manual in tests).
     let finish_tick = finish_if_ready.clone();
-    // Late wakes skip runs, so a fixed step per run falls behind the progress animation.
     let started = nsh_core::time::now();
     let _timer = set_interval(Duration::from_millis(100), move || {
         let elapsed = nsh_core::time::now().saturating_duration_since(started);
@@ -740,13 +699,10 @@ fn BreakOverlayRoot() -> impl IntoElement {
     }
 }
 
-/// Runs the Cozy fullscreen break overlay using Native Shell (`nsh`) and returns `OverlayOutcome`.
 pub fn run_overlay(request: OverlayRequest) -> Result<OverlayOutcome, UiError> {
     run_overlay_with_hook(request, None, None)
 }
 
-/// Runs the break overlay. Calls `on_shown` once its window is shown and focused, and
-/// `on_outcome` once with the outcome before it quits.
 pub fn run_overlay_with_hook(
     request: OverlayRequest,
     on_shown: Option<OverlayShownCallback>,

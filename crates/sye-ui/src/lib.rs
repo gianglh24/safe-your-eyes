@@ -1,5 +1,3 @@
-//! On-demand Native Shell (`nsh`) Cozy UI for `safe-your-eyes`.
-
 mod monitors;
 mod overlay;
 mod settings;
@@ -24,12 +22,9 @@ pub use settings::{
 };
 pub use theme::SUPPORT_URL;
 
-/// Errors returned by `sye-ui` entry points.
 #[derive(Debug)]
 pub enum UiError {
-    /// Failed to initialize or run the native `nsh` window.
     WindowInit(String),
-    /// Configuration loading, validation, or persistence error.
     Config(sye_core::ConfigError),
 }
 

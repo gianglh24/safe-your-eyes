@@ -1,5 +1,3 @@
-//! Background daemon loop wiring `sye-core`, `sye-platform`, and on-demand `sye-ui` subprocesses.
-
 use std::fmt::Write as _;
 use std::path::Path;
 use std::process::{Child, Command, ExitCode, Stdio};
@@ -159,7 +157,6 @@ impl DaemonHost<'_> {
         if let Some(mut child) = self.settings_child.take() {
             let _ = child.kill();
             let _ = child.wait();
-            // `SIGKILL` skips `on_app_quit` in the Settings child, so restore saved autostart here.
             if !self.headless {
                 let _ =
                     sye_platform::sync_system_autostart(saved_autostart, Some(self.config_file));
@@ -189,7 +186,6 @@ fn rng_seed_from_clock() -> u64 {
         })
 }
 
-/// Runs the single-instance background daemon until `Quit`.
 pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> ExitCode {
     let server = match IpcServer::bind(&paths.socket_path) {
         Ok(srv) => srv,
@@ -242,7 +238,6 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
     let idle_provider = SystemIdleProvider::new();
     let dnd_provider = SystemDndProvider::new();
     let (tray_tx, tray_rx) = mpsc::channel::<TrayEvent>();
-    // Initialize the platform event loop before creating TrayHandle (required on macOS AppKit).
     let app_loop = (!headless).then(|| PlatformEventLoop::new(tray_tx.clone()));
     let tray = if headless {
         None
@@ -282,7 +277,6 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
     let launched_at_login = app_loop
         .as_ref()
         .is_some_and(PlatformEventLoop::was_launched_as_login_item);
-    // The first countdown starts when the Settings window that opens at startup closes.
     let mut restart_on_settings_close =
         should_open_settings_on_startup(headless, background, launched_at_login);
     if restart_on_settings_close {
@@ -370,7 +364,6 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
     ExitCode::SUCCESS
 }
 
-/// Drains queued IPC requests; returns `false` when a `Quit` command was received.
 fn drain_ipc_requests(
     server: &IpcServer,
     scheduler: &mut Scheduler<SystemClock>,
@@ -443,7 +436,6 @@ fn drain_ipc_requests(
     }
 }
 
-/// Drains pending tray menu events; returns `false` when `TrayEvent::Quit` was received.
 fn drain_tray_events(
     tray_rx: &mpsc::Receiver<TrayEvent>,
     scheduler: &mut Scheduler<SystemClock>,
@@ -494,14 +486,12 @@ fn spawn_settings_subprocess(config_file: &Path) -> std::io::Result<Child> {
     cmd.arg("--internal-settings")
         .arg("--config")
         .arg(config_file)
-        // After `detach_console`, inherited std handles are stale on Windows and `spawn` fails.
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     sye_platform::hide_child_console(&mut cmd).spawn()
 }
 
-/// Formats a human-readable `--status` line for CLI users.
 #[must_use]
 pub(crate) fn format_human_status(snapshot: &sye_core::scheduler::StatusSnapshot) -> String {
     let state_label = match snapshot.state {

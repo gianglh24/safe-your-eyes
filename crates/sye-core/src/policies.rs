@@ -1,28 +1,18 @@
-//! Automatic break policies: `SmartPause`, `DoNotDisturb`, and `LimitConsecutiveSkipping`.
-
 use std::time::Duration;
 
 use crate::config::{DoNotDisturbConfig, SkipLimitConfig, SmartPauseConfig};
 use crate::scheduler::SchedulerState;
 
-/// Deferral duration (seconds) when `SmartPauseConfig::postpone_if_active` triggers.
 pub const ACTIVE_POSTPONE_SECS: u64 = 2;
 
-/// Decision produced by `SmartPausePolicy::evaluate_idle`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmartPauseDecision {
     None,
-    /// User idle reached threshold while waiting; enter `Resting`.
     PauseResting,
-    /// User returned before `short_break_interval_secs`; shift next break forward by `credit`.
-    ResumeCreditBack {
-        credit: Duration,
-    },
-    /// User was idle at least `short_break_interval_secs`; reset break cycle.
+    ResumeCreditBack { credit: Duration },
     ResumeResetCycle,
 }
 
-/// Tracks user idleness to pause and credit or reset break intervals.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SmartPausePolicy {
     idle_paused: bool,
@@ -30,7 +20,6 @@ pub struct SmartPausePolicy {
 }
 
 impl SmartPausePolicy {
-    /// Creates a fresh `SmartPausePolicy`.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -39,19 +28,16 @@ impl SmartPausePolicy {
         }
     }
 
-    /// Returns whether `SmartPausePolicy` currently owns a `Resting` pause.
     #[must_use]
     pub const fn is_idle_paused(&self) -> bool {
         self.idle_paused
     }
 
-    /// Clears internal idle tracking (called when manually disabled or quitting).
     pub const fn reset(&mut self) {
         self.idle_paused = false;
         self.idle_origin = None;
     }
 
-    /// Evaluates observed OS idle duration against the current scheduler state.
     #[must_use]
     pub fn evaluate_idle(
         &mut self,
@@ -94,8 +80,6 @@ impl SmartPausePolicy {
         SmartPauseDecision::None
     }
 
-    /// Returns a short deferral if `postpone_if_active` is enabled and the user was active
-    /// within the last `ACTIVE_POSTPONE_SECS` seconds.
     #[must_use]
     pub fn should_postpone_if_active(
         cfg: &SmartPauseConfig,
@@ -110,7 +94,6 @@ impl SmartPausePolicy {
     }
 }
 
-/// Snapshot of OS activity evaluated by `DoNotDisturbPolicy`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DndContext {
     pub is_fullscreen: bool,
@@ -119,7 +102,6 @@ pub struct DndContext {
     pub system_inhibited: bool,
 }
 
-/// Reason a break was suppressed by `DoNotDisturbPolicy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DndReason {
     OnBattery,
@@ -128,7 +110,6 @@ pub enum DndReason {
     SystemInhibited,
 }
 
-/// Evaluation outcome of `DoNotDisturbPolicy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DndDecision {
     Allow,
@@ -136,20 +117,16 @@ pub enum DndDecision {
 }
 
 impl DndDecision {
-    /// Returns `true` when the break should be suppressed.
     #[must_use]
     pub const fn should_suppress(self) -> bool {
         matches!(self, Self::Suppress(_))
     }
 }
 
-/// Evaluates fullscreen, window-list, battery, and system-inhibit suppression rules.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DoNotDisturbPolicy;
 
 impl DoNotDisturbPolicy {
-    /// Evaluates `ctx` against `cfg` using strict `SafeEyes` precedence:
-    /// `while_on_battery` -> `skip_break_windows` -> `take_break_windows` -> `is_fullscreen` -> `system_inhibited`.
     #[must_use]
     pub fn evaluate(cfg: &DoNotDisturbConfig, ctx: &DndContext) -> DndDecision {
         if !cfg.enabled {
@@ -189,14 +166,12 @@ fn matches_any_window_lower(active_lower: &str, patterns: &[String]) -> bool {
     })
 }
 
-/// Tracks consecutive skipped or postponed breaks and enforces `SkipLimitConfig`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SkipLimitPolicy {
     consecutive_skips: u32,
 }
 
 impl SkipLimitPolicy {
-    /// Creates a policy initialized with an existing skip count (e.g. from `SessionState`).
     #[must_use]
     pub const fn new(initial_count: u32) -> Self {
         Self {
@@ -204,34 +179,28 @@ impl SkipLimitPolicy {
         }
     }
 
-    /// Returns the current number of consecutive skips or postpones.
     #[must_use]
     pub const fn count(&self) -> u32 {
         self.consecutive_skips
     }
 
-    /// Increments the consecutive skip counter on a skipped break.
     pub const fn record_skip(&mut self) {
         self.consecutive_skips = self.consecutive_skips.saturating_add(1);
     }
 
-    /// Increments the consecutive skip counter on a postponed break.
     pub const fn record_postpone(&mut self) {
         self.consecutive_skips = self.consecutive_skips.saturating_add(1);
     }
 
-    /// Resets the consecutive skip counter after a completed break.
     pub const fn record_completed_break(&mut self) {
         self.consecutive_skips = 0;
     }
 
-    /// Returns `true` when Skip and Postpone controls must be disabled.
     #[must_use]
     pub const fn controls_disabled(&self, cfg: &SkipLimitConfig) -> bool {
         cfg.enabled && self.consecutive_skips >= cfg.max_skips
     }
 
-    /// Returns an optional status note for the break overlay.
     #[must_use]
     pub fn status_label(&self, cfg: &SkipLimitConfig) -> Option<String> {
         if !cfg.enabled {
@@ -317,7 +286,6 @@ mod tests {
             }
         );
 
-        // Exact boundary total_idle == short_break_interval_secs -> ResumeResetCycle.
         assert_eq!(
             policy.evaluate_idle(
                 &cfg,
@@ -366,7 +334,6 @@ mod tests {
             SmartPauseDecision::None
         );
 
-        // Reset prevents stale resume after manual disable.
         let _ = policy.evaluate_idle(
             &cfg,
             SchedulerState::Waiting,
@@ -407,7 +374,6 @@ mod tests {
             SmartPausePolicy::should_postpone_if_active(&cfg, Duration::from_secs(2)),
             None
         );
-        // now < current_idle does not underflow.
         assert_eq!(
             policy.evaluate_idle(
                 &cfg,
@@ -445,13 +411,11 @@ mod tests {
             skip_break_windows: vec!["vlc".to_owned(), String::new(), "   ".to_owned()],
             take_break_windows: vec!["vlc".to_owned(), "code".to_owned()],
         };
-        // Battery beats window lists.
         assert_eq!(
             DoNotDisturbPolicy::evaluate(&cfg, &full_ctx),
             DndDecision::Suppress(DndReason::OnBattery)
         );
 
-        // skip_break_windows beats take_break_windows even when not fullscreen.
         let both_lists = DndContext {
             is_fullscreen: false,
             active_window_class: Some("VLC Media Player".to_owned()),
@@ -463,7 +427,6 @@ mod tests {
             DndDecision::Suppress(DndReason::SkipWindow)
         );
 
-        // take_break_windows overrides fullscreen and system_inhibited.
         let allowed_fullscreen = DndContext {
             is_fullscreen: true,
             active_window_class: Some("Code-OSS".to_owned()),
@@ -475,7 +438,6 @@ mod tests {
             DndDecision::Allow
         );
 
-        // Empty/whitespace skip patterns do not match Firefox; fullscreen still suppresses.
         let firefox_full = DndContext {
             is_fullscreen: true,
             active_window_class: Some("Firefox".to_owned()),
@@ -487,7 +449,6 @@ mod tests {
             DndDecision::Suppress(DndReason::Fullscreen)
         );
 
-        // Non-fullscreen + system_inhibited -> SystemInhibited.
         let inhibited = DndContext {
             is_fullscreen: false,
             active_window_class: None,
@@ -540,7 +501,6 @@ mod tests {
         assert!(!policy.controls_disabled(&enabled));
         assert_eq!(policy.status_label(&enabled), None);
 
-        // Saturating increment and max_skips == 0 runtime safety.
         let mut max_policy = SkipLimitPolicy::new(u32::MAX);
         max_policy.record_skip();
         assert_eq!(max_policy.count(), u32::MAX);

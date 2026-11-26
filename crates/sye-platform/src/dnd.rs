@@ -1,5 +1,3 @@
-//! Cross-platform Do-Not-Disturb context provider (`sye_core::DndProvider`).
-
 #[cfg(any(target_os = "linux", test))]
 use std::fs;
 #[cfg(any(target_os = "linux", test))]
@@ -9,10 +7,6 @@ use std::sync::Mutex;
 
 use sye_core::{DndContext, DndProvider, PlatformError};
 
-/// OS Do-Not-Disturb provider querying fullscreen window, window class, battery, and inhibit state.
-///
-/// Always degrades gracefully per signal so `query_dnd_context()` returns `Ok(DndContext)` even in
-/// headless CI environments.
 pub struct SystemDndProvider {
     #[cfg(target_os = "linux")]
     x11: Mutex<Option<linux_impl::X11DndState>>,
@@ -25,7 +19,6 @@ impl std::fmt::Debug for SystemDndProvider {
 }
 
 impl SystemDndProvider {
-    /// Creates a new `SystemDndProvider`.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -62,7 +55,6 @@ impl DndProvider for SystemDndProvider {
     }
 }
 
-/// Parses an X11 `WM_CLASS` property (`res_name\0res_class\0`), preferring `res_class`.
 #[cfg(any(target_os = "linux", test))]
 fn parse_wm_class(raw: &[u8]) -> Option<String> {
     let mut parts = raw
@@ -82,8 +74,6 @@ fn parse_wm_class(raw: &[u8]) -> Option<String> {
     second.or(first).map(|text| text.trim().to_owned())
 }
 
-/// Returns `true` if any battery entry under `power_supply_dir` has `type == Battery` and
-/// `status == Discharging` (case-insensitive).
 #[cfg(any(target_os = "linux", test))]
 fn is_battery_discharging_in(power_supply_dir: &Path) -> bool {
     let Ok(entries) = fs::read_dir(power_supply_dir) else {
@@ -108,7 +98,6 @@ fn is_battery_discharging_in(power_supply_dir: &Path) -> bool {
     false
 }
 
-/// Parses `pmset -g batt` output on macOS and returns `true` when running on discharging battery.
 #[cfg(any(target_os = "macos", test))]
 fn parse_macos_pmset_discharging(output: &str) -> bool {
     if output.contains("'Battery Power'") {
@@ -123,7 +112,6 @@ fn parse_macos_pmset_discharging(output: &str) -> bool {
     false
 }
 
-/// Parses two-line `osascript` output (`<app_name>\n<true|false>`) on macOS.
 #[cfg(any(target_os = "macos", test))]
 fn parse_macos_frontmost_output(output: &str) -> (bool, Option<String>) {
     let mut lines = output.lines();
@@ -163,7 +151,6 @@ mod linux_impl {
         fn connect() -> Option<Self> {
             let (conn, screen_num) = RustConnection::connect(None).ok()?;
             let root = conn.setup().roots.get(screen_num)?.root;
-            // Pipeline all three InternAtom requests into a single X11 round trip.
             let active_cookie = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW").ok()?;
             let wm_state_cookie = conn.intern_atom(false, b"_NET_WM_STATE").ok()?;
             let fullscreen_cookie = conn.intern_atom(false, b"_NET_WM_STATE_FULLSCREEN").ok()?;
@@ -201,7 +188,6 @@ mod linux_impl {
                 return Some((false, None));
             }
 
-            // Pipeline both window property queries into a single X11 round trip.
             let state_cookie = self
                 .conn
                 .get_property(false, active_win, self.atom_wm_state, AtomEnum::ATOM, 0, 64)
@@ -268,7 +254,6 @@ mod linux_impl {
         let Ok(conn) = zbus::blocking::Connection::session() else {
             return false;
         };
-        // Flag 8 corresponds to idle inhibit in org.gnome.SessionManager.IsInhibited.
         let Ok(msg) = conn.call_method(
             Some("org.gnome.SessionManager"),
             "/org/gnome/SessionManager",

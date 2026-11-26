@@ -1,6 +1,3 @@
-//! Compiles PNG tray icon assets in `assets/icons/tray/` into compact RLE-encoded RGBA tables
-//! included directly in the binary (zero runtime image-decoding dependencies).
-
 use std::env;
 use std::error::Error;
 use std::fs::File;
