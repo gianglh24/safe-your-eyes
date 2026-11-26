@@ -66,3 +66,48 @@ pub fn mark_own_windows_fullscreen() {
         };
     }
 }
+
+pub fn sync_own_windows_appearance(mode: sye_core::config::ThemeMode) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::MainThreadMarker;
+        use objc2::rc::autoreleasepool;
+        use objc2_app_kit::{
+            NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua,
+            NSAppearanceNameDarkAqua, NSApplication,
+        };
+        use sye_core::config::ThemeMode;
+
+        // `nsh-platform-macos` updates the root content view on `set_color_scheme`, leaving the
+        // main `NSWindow` on its launch appearance (which draws a 1px black DarkAqua frame border
+        // around a Light Settings window when macOS is in Dark Mode).
+        #[expect(unsafe_code, reason = "macOS AppKit NSAppearanceName constants")]
+        let apply = |mtm: MainThreadMarker| {
+            autoreleasepool(|_| {
+                let appearance = match mode {
+                    // SAFETY: `NSAppearanceNameAqua` and `NSAppearanceNameDarkAqua` are immutable
+                    // AppKit string constants.
+                    ThemeMode::Light => {
+                        NSAppearance::appearanceNamed(unsafe { NSAppearanceNameAqua })
+                    }
+                    ThemeMode::Dark => {
+                        NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua })
+                    }
+                    ThemeMode::System => None,
+                };
+                let app = NSApplication::sharedApplication(mtm);
+                app.setAppearance(appearance.as_deref());
+                for window in app.windows() {
+                    window.setAppearance(appearance.as_deref());
+                }
+            });
+        };
+
+        if let Some(mtm) = MainThreadMarker::new() {
+            apply(mtm);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = mode;
+}
