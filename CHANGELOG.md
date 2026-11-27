@@ -2,6 +2,13 @@
 
 All notable changes to Safe Your Eyes are recorded in this file.
 
+## [0.5.0] - 2026-11-27
+
+### Added
+
+- Multi-language support: the app now supports English and Vietnamese (`language` setting: `system`, `en`, or `vi`) across the Settings window, break overlay, pre-break banner, and system tray menu.
+- Microsoft Store build (`--features msstore`): Windows MSIX Store packages disable in-app update checks and binary replacement so Microsoft Store manages updates.
+
 ## [0.4.0] - 2026-11-27
 
 ### Added
