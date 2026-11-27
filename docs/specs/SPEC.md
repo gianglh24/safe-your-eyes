@@ -211,9 +211,13 @@ When the user changes `Launch at login (startup)`, the Settings window saves `co
 Each chime uses a smooth attack and exponential decay envelope to prevent clicks.
 Volume clamps to 0 through 100, and volume 0 produces a valid silent WAV buffer.
 `sye-platform` plays the buffer without blocking via `pw-play`, `paplay`, or `aplay` on Linux, `afplay` on macOS, and `PlaySoundW` on Windows.
-On macOS, `OsNotifier` shows a lazy non-activating `NSPanel` banner in the top-right corner of the active display, updates its countdown title in place each second without window animations, and destroys the panel on dismissal.
-On Linux, `OsNotifier` updates the active `notify-rust` notification in place each second and closes it on dismissal.
-On Windows, `OsNotifier` shows a lazy per-monitor-DPI-aware, topmost, non-activating Win32 popup banner in the bottom-right corner of the work area on the display under the cursor, follows the `AppsUseLightTheme` light or dark app mode, updates its countdown title in place each second, and destroys the window on dismissal.
+On macOS, `OsNotifier` shows a lazy non-activating `NSPanel` banner in the top-right corner of the active display without window animations and destroys the panel on dismissal.
+On Windows, `OsNotifier` shows a lazy per-monitor-DPI-aware, topmost, non-activating Win32 popup banner in the bottom-right corner of the work area on the display under the cursor, follows the `AppsUseLightTheme` light or dark app mode, and destroys the window on dismissal.
+On macOS and Windows, the pre-break banner shows the break type and exercise name on the left, a Cozy countdown pill badge (`<N>s` under 1 minute, `M:SS` from 1 minute to under 100 minutes, `<N>m` at 100 minutes or more) on the right, and a 3px progress bar along the bottom edge that shrinks each second.
+The progress bar measures the remaining seconds against the effective warning duration that the scheduler sends with each pre-break notification.
+The countdown pill badge uses the Cozy yellow badge palette above 3 seconds and switches to the Cozy accent palette (`ACCENT` and `ON_ACCENT`) at 3 seconds or less.
+The banner sets a spoken accessibility label without a static countdown number when it opens or changes title or exercise, avoiding repeated screen reader announcements every second.
+On Linux, `OsNotifier` updates the active `notify-rust` notification in place each second with a freedesktop `value` progress hint (0 to 100) and closes it on dismissal.
 On macOS, Linux, and Windows, when the user clicks or closes the pre-break notification, `OsNotifier` stops the countdown updates for the rest of that cycle.
 
 ### 9.2 Local IPC Protocol
@@ -292,7 +296,8 @@ Status banners and destructive buttons pair `warning-muted` / `error-muted` fill
 - Switching Settings tabs resets the Form Card scroll offset to the top.
 - When `strict_break` is `true`, the `Policies` screen sets `limit_consecutive_skips.enabled` to `false` and disables `Limit consecutive skips` and `Max consecutive skips`.
 - When `strict_break` is `true`, the `Skip Limit` KPI card shows `Strict`.
-- The fixed page header shows the active screen title (`Timing`, `Policies`, `Exercises`, or `About & Support`) with the animated highlighter bar on the left, a live daemon countdown status pill next to the Cozy theme toggle pill (`Theme: System`, `Theme: Light`, `Theme: Dark` with vector SVG icon) on the right when the daemon runs, and four Pastel KPI summary cards below.
+- The fixed page header shows the active screen title (`Timing`, `Policies`, `Exercises`, or `About & Support`) with the animated highlighter bar on the left, a live daemon countdown badge next to the Cozy theme toggle pill (`Theme: System`, `Theme: Light`, `Theme: Dark` with vector SVG icon) on the right when the daemon runs, and four Pastel KPI summary cards below.
+- The live daemon countdown badge uses Cozy v0.2.0 category badge tokens (`green`, `yellow`, `orange`, `blue`, and `gray`), pairs each scheduler state with a vector SVG icon, separates the status label from the bold tabular-numeral `MM:SS` countdown chip, and exposes `AccessibilityRole::Timer` with a spoken label in whole minutes ("less than a minute" under 1 minute, "Break starting soon" during the pre-break warning), so the label changes at most once per minute.
 - The unified rounded Form Card contains the scrollable form and the clipped sticky toolbar with automatic save status and a `Reset to defaults` button.
 - Every valid change in the Settings window saves `config.toml` immediately. Invalid input shows a validation banner and keeps the last valid `config.toml` on disk. While the Settings window is open, the daemon checks the `config.toml` modification time every second and applies a changed configuration.
 - The `Reset to defaults` button is disabled while the configuration matches `Config::reset_to_default()` and activates with the accent style when any setting differs from default. Pressing `Reset to defaults` restores defaults and saves immediately.
@@ -384,6 +389,7 @@ This section lists the operating system and framework limits that the code works
 2. The GNOME Mutter `IdleMonitor` returns idle time in milliseconds as `u64`. The Freedesktop `ScreenSaver` fallback returns idle time in milliseconds as `u32`.
 3. The notification server can give a new id to a notification that replaces an expired one. `OsNotifier` stores the id that the server returns.
 4. `handle_action` blocks until the server reports `ActionInvoked` or `NotificationClosed`. `OsNotifier` calls it on a separate thread.
+5. After an atomic binary replacement on Linux, `std::env::current_exe` returns `<path> (deleted)`. The daemon strips that suffix before it starts the replacement binary.
 
 ### 12.4 Native Shell (`nsh`)
 
