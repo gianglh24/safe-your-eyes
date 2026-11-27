@@ -1,5 +1,7 @@
+#[cfg(not(feature = "msstore"))]
+use sye_core::HOMEBREW_UPGRADE_COMMAND;
 use sye_core::config::{BreakType, ConfigError, ThemeMode};
-use sye_core::{HOMEBREW_UPGRADE_COMMAND, LanguageMode, Locale};
+use sye_core::{LanguageMode, Locale};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UiText {
@@ -72,12 +74,19 @@ pub(crate) struct UiText {
 
     pub updates_title: &'static str,
     pub updates_caption: &'static str,
+    #[cfg(not(feature = "msstore"))]
     pub check_updates_auto: &'static str,
+    #[cfg(not(feature = "msstore"))]
     pub update_and_restart: &'static str,
+    #[cfg(not(feature = "msstore"))]
     pub updating_button: &'static str,
+    #[cfg(not(feature = "msstore"))]
     pub download_page: &'static str,
+    #[cfg(not(feature = "msstore"))]
     pub download_update: &'static str,
+    #[cfg(not(feature = "msstore"))]
     pub check_for_updates: &'static str,
+    #[cfg(not(feature = "msstore"))]
     pub checking_button: &'static str,
 
     pub support_title: &'static str,
@@ -186,13 +195,23 @@ const EN_TEXT: UiText = UiText {
     remove_button: "Remove",
 
     updates_title: "Updates",
+    #[cfg(not(feature = "msstore"))]
     updates_caption: "Checks GitHub Releases for newer versions and verifies SHA-256 before installing.",
+    #[cfg(feature = "msstore")]
+    updates_caption: "Updates are managed by Microsoft Store.",
+    #[cfg(not(feature = "msstore"))]
     check_updates_auto: "Check for updates automatically",
+    #[cfg(not(feature = "msstore"))]
     update_and_restart: "Update & Restart",
+    #[cfg(not(feature = "msstore"))]
     updating_button: "Updating...",
+    #[cfg(not(feature = "msstore"))]
     download_page: "Download Page",
+    #[cfg(not(feature = "msstore"))]
     download_update: "Download Update",
+    #[cfg(not(feature = "msstore"))]
     check_for_updates: "Check for Updates",
+    #[cfg(not(feature = "msstore"))]
     checking_button: "Checking...",
 
     support_title: "Support Safe Your Eyes",
@@ -301,13 +320,23 @@ const VI_TEXT: UiText = UiText {
     remove_button: "Xóa",
 
     updates_title: "Cập nhật",
+    #[cfg(not(feature = "msstore"))]
     updates_caption: "Kiểm tra bản phát hành mới trên GitHub Releases và xác minh SHA-256 trước khi cài đặt.",
+    #[cfg(feature = "msstore")]
+    updates_caption: "Bản cập nhật do Microsoft Store quản lý.",
+    #[cfg(not(feature = "msstore"))]
     check_updates_auto: "Tự động kiểm tra cập nhật",
+    #[cfg(not(feature = "msstore"))]
     update_and_restart: "Cập nhật & Khởi động lại",
+    #[cfg(not(feature = "msstore"))]
     updating_button: "Đang cập nhật...",
+    #[cfg(not(feature = "msstore"))]
     download_page: "Trang tải xuống",
+    #[cfg(not(feature = "msstore"))]
     download_update: "Tải bản cập nhật",
+    #[cfg(not(feature = "msstore"))]
     check_for_updates: "Kiểm tra cập nhật",
+    #[cfg(not(feature = "msstore"))]
     checking_button: "Đang kiểm tra...",
 
     support_title: "Ủng hộ Safe Your Eyes",
@@ -464,6 +493,7 @@ pub(crate) fn format_version_summary(
     }
 }
 
+#[cfg(not(feature = "msstore"))]
 #[must_use]
 pub(crate) fn format_homebrew_upgrade_hint(locale: Locale) -> String {
     match locale {
@@ -504,6 +534,7 @@ pub(crate) fn format_window_index_oob(label: &str, index: usize, locale: Locale)
     }
 }
 
+#[cfg(not(feature = "msstore"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UpdateStatusMessage {
     Available(String),
@@ -520,6 +551,7 @@ pub(crate) enum UpdateStatusMessage {
     OpenDownloadFailed(String),
 }
 
+#[cfg(not(feature = "msstore"))]
 impl UpdateStatusMessage {
     #[must_use]
     pub(crate) fn format(&self, locale: Locale) -> String {

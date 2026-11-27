@@ -4,6 +4,7 @@ use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use sye_core::Locale;
 use sye_core::config::{BreakType, Config};
 use sye_core::ipc::{IpcCommand, IpcResponse};
 use sye_core::scheduler::{
@@ -11,8 +12,9 @@ use sye_core::scheduler::{
 };
 use sye_core::session::SessionState;
 use sye_core::traits::{DndProvider, DndQueryOptions, IdleProvider, Notifier, OverlayLauncher};
+#[cfg(not(feature = "msstore"))]
 use sye_core::{
-    HOMEBREW_UPGRADE_COMMAND, Locale, PUBLIC_DOWNLOAD_URL, UPDATE_CHECK_INTERVAL_SECS,
+    HOMEBREW_UPGRADE_COMMAND, PUBLIC_DOWNLOAD_URL, UPDATE_CHECK_INTERVAL_SECS,
     UPDATE_INITIAL_DELAY_SECS, UpdateCacheState, UpdateInfo, UpdateStrategy,
 };
 use sye_platform::{
@@ -22,9 +24,12 @@ use sye_platform::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
+#[cfg(not(feature = "msstore"))]
 const UPDATE_CACHE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 // The macOS and Windows banners have no auto-hide, so the daemon closes update notices itself.
+#[cfg(not(feature = "msstore"))]
 const UPDATE_NOTICE_DURATION: Duration = Duration::from_secs(8);
+#[cfg(not(feature = "msstore"))]
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,10 +56,14 @@ struct DaemonHost<'a> {
     settings_child: Option<Child>,
     settings_exited: bool,
     tray: Option<TrayHandle>,
+    #[cfg(not(feature = "msstore"))]
     available_update: Option<UpdateInfo>,
+    #[cfg(not(feature = "msstore"))]
     update_in_progress: bool,
+    #[cfg(not(feature = "msstore"))]
     update_apply_rx: Option<mpsc::Receiver<Result<(), String>>>,
     headless_break_deadline: Option<Instant>,
+    #[cfg(not(feature = "msstore"))]
     update_notice_dismiss_at: Option<Instant>,
 }
 
@@ -152,6 +161,7 @@ impl DaemonHost<'_> {
         }
     }
 
+    #[cfg(not(feature = "msstore"))]
     fn sync_tray_update(&mut self) {
         if let Some(handle) = self.tray.as_mut() {
             handle.set_available_update(
@@ -174,12 +184,14 @@ impl DaemonHost<'_> {
         }
     }
 
+    #[cfg(not(feature = "msstore"))]
     fn show_update_notice(&mut self, summary: &str, body: &str) {
         if self.notifier.show_notice(summary, body).is_ok() {
             self.update_notice_dismiss_at = Some(Instant::now() + UPDATE_NOTICE_DURATION);
         }
     }
 
+    #[cfg(not(feature = "msstore"))]
     fn expire_update_notice(&mut self, state: SchedulerState) {
         let Some(deadline) = self.update_notice_dismiss_at else {
             return;
@@ -192,11 +204,13 @@ impl DaemonHost<'_> {
         }
     }
 
+    #[cfg(not(feature = "msstore"))]
     fn apply_cached_update(&mut self, cache: &UpdateCacheState) {
         self.available_update = cache.available_update(CURRENT_VERSION);
         self.sync_tray_update();
     }
 
+    #[cfg(not(feature = "msstore"))]
     fn trigger_tray_update(&mut self) {
         if self.headless || self.update_in_progress {
             return;
@@ -264,6 +278,7 @@ impl DaemonHost<'_> {
         }
     }
 
+    #[cfg(not(feature = "msstore"))]
     fn poll_update_apply(&mut self) -> bool {
         let Some(rx) = self.update_apply_rx.as_ref() else {
             return false;
@@ -430,11 +445,13 @@ fn config_modified_at(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+#[cfg(not(feature = "msstore"))]
 fn file_fingerprint(path: &Path) -> Option<(SystemTime, u64)> {
     let meta = std::fs::metadata(path).ok()?;
     Some((meta.modified().ok()?, meta.len()))
 }
 
+#[cfg(not(feature = "msstore"))]
 fn poll_update_cache_change(
     path: &Path,
     force_read: bool,
@@ -564,18 +581,22 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
     } else {
         OsNotifier::with_locale(active_locale)
     };
+    #[cfg(not(feature = "msstore"))]
     if !headless {
         sye_platform::cleanup_current_stale_old_executable();
     }
 
+    #[cfg(not(feature = "msstore"))]
     let initial_update_cache_fingerprint = (!headless)
         .then(|| file_fingerprint(&paths.update_cache_file))
         .flatten();
+    #[cfg(not(feature = "msstore"))]
     let (cached_update, _) = if headless {
         (UpdateCacheState::default(), None)
     } else {
         UpdateCacheState::load_or_default(&paths.update_cache_file)
     };
+    #[cfg(not(feature = "msstore"))]
     let initial_available_update = cached_update.available_update(CURRENT_VERSION);
 
     let mut host = DaemonHost {
@@ -597,21 +618,31 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
         settings_child: None,
         settings_exited: false,
         tray,
+        #[cfg(not(feature = "msstore"))]
         available_update: initial_available_update,
+        #[cfg(not(feature = "msstore"))]
         update_in_progress: false,
+        #[cfg(not(feature = "msstore"))]
         update_apply_rx: None,
         headless_break_deadline: None,
+        #[cfg(not(feature = "msstore"))]
         update_notice_dismiss_at: None,
     };
+    #[cfg(not(feature = "msstore"))]
     host.sync_tray_update();
 
     let mut last_policy_check = Instant::now();
     let mut last_config_poll = Instant::now();
+    #[cfg(not(feature = "msstore"))]
     let mut last_update_cache_poll = Instant::now();
     let mut config_mtime = config_modified_at(&paths.config_file);
+    #[cfg(not(feature = "msstore"))]
     let mut update_cache_fingerprint = initial_update_cache_fingerprint;
+    #[cfg(not(feature = "msstore"))]
     let mut last_update_cache = cached_update;
+    #[cfg(not(feature = "msstore"))]
     let mut update_check_rx: Option<mpsc::Receiver<Option<UpdateInfo>>> = None;
+    #[cfg(not(feature = "msstore"))]
     let mut next_update_check_at = compute_next_update_check(&last_update_cache);
     let mut restart_after_exit = false;
 
@@ -664,6 +695,7 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
             host.set_locale(scheduler.active_locale());
         }
 
+        #[cfg(not(feature = "msstore"))]
         if !headless {
             if settings_exited || last_update_cache_poll.elapsed() >= UPDATE_CACHE_POLL_INTERVAL {
                 last_update_cache_poll = Instant::now();
@@ -792,6 +824,7 @@ pub(crate) fn run_daemon(paths: &AppPaths, headless: bool, background: bool) -> 
     ExitCode::SUCCESS
 }
 
+#[cfg(not(feature = "msstore"))]
 fn compute_next_update_check(cached: &UpdateCacheState) -> Instant {
     let now = sye_platform::now_unix_secs();
     if cached.is_check_due(now) {
@@ -905,6 +938,7 @@ fn drain_tray_events(
                 }
                 Vec::new()
             }
+            #[cfg(not(feature = "msstore"))]
             TrayEvent::UpdateApp => {
                 if can_open_settings(scheduler.state(), scheduler.tray_snapshot().menu_locked) {
                     host.trigger_tray_update();
@@ -1106,6 +1140,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "msstore"))]
     #[test]
     fn poll_update_cache_change_detects_live_updates_and_skips_partial_writes()
     -> Result<(), Box<dyn std::error::Error>> {

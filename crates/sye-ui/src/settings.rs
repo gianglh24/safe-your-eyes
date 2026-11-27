@@ -14,25 +14,29 @@ use sye_core::scheduler::{SchedulerState, StatusSnapshot};
 use sye_core::{Locale, UpdateInfo, UpdateStrategy, localize_exercise_name};
 
 use crate::UiError;
+#[cfg(not(feature = "msstore"))]
+use crate::i18n::{UpdateStatusMessage, format_homebrew_upgrade_hint};
 use crate::i18n::{
-    UpdateStatusMessage, format_config_error, format_exercise_index_oob,
-    format_homebrew_upgrade_hint, format_kpi_cadence, format_kpi_max_skips,
+    format_config_error, format_exercise_index_oob, format_kpi_cadence, format_kpi_max_skips,
     format_support_link_caption, format_version_summary, format_waiting_a11y,
     format_window_index_oob, format_window_pattern_empty, ui_text,
 };
 use crate::overlay::format_mm_ss;
+#[cfg(not(feature = "msstore"))]
+use crate::theme::DOWNLOAD_PAGE_URL;
 use crate::theme::{
-    DOWNLOAD_PAGE_URL, SUPPORT_URL, appearance_for_theme_mode, colors, motion, next_theme_mode,
-    radii, theme_mode_for_appearance,
+    SUPPORT_URL, appearance_for_theme_mode, colors, motion, next_theme_mode, radii,
+    theme_mode_for_appearance,
 };
 use crate::ui::{
     CountdownPillState, CountdownTone, KpiTone, app_icon, countdown_status_pill, cozy_input,
     cozy_input_with_disabled, cozy_switch, cozy_switch_with_disabled, destructive_button,
-    external_link_button, language_toggle_button, page_heading, pastel_kpi_card,
-    primary_button_with_disabled, secondary_button, section_divider, section_header,
-    sidebar_nav_indicator, sidebar_nav_item, stagger_item, status_banner, support_link,
-    support_qr_card, theme_toggle_button, version_update_badge,
+    language_toggle_button, page_heading, pastel_kpi_card, primary_button_with_disabled,
+    secondary_button, section_divider, section_header, sidebar_nav_indicator, sidebar_nav_item,
+    stagger_item, status_banner, support_link, support_qr_card, theme_toggle_button,
 };
+#[cfg(not(feature = "msstore"))]
+use crate::ui::{external_link_button, version_update_badge};
 
 #[cfg(target_os = "linux")]
 use nsh_platform_linux as platform;
@@ -1182,11 +1186,13 @@ fn exercises_section(
         ))
 }
 
+#[cfg(not(feature = "msstore"))]
 enum UpdateWorkerResult {
     Check(Result<Option<UpdateInfo>, String>),
     Apply(Result<ApplyUpdateOutcome, String>),
 }
 
+#[cfg(not(feature = "msstore"))]
 #[derive(Clone, Copy)]
 struct UpdateUiState {
     available: Signal<Option<UpdateInfo>>,
@@ -1197,6 +1203,7 @@ struct UpdateUiState {
     strategy: UpdateStrategy,
 }
 
+#[cfg(not(feature = "msstore"))]
 fn poll_update_worker(
     rx: Rc<mpsc::Receiver<UpdateWorkerResult>>,
     state: UpdateUiState,
@@ -1274,6 +1281,7 @@ fn poll_update_worker(
     }
 }
 
+#[cfg(not(feature = "msstore"))]
 fn start_apply_update(
     update_ui: UpdateUiState,
     apply_cb: &Option<ApplyUpdateCallback>,
@@ -1310,6 +1318,7 @@ fn start_apply_update(
     true
 }
 
+#[cfg(not(feature = "msstore"))]
 fn trigger_update_badge_action(
     vm: Signal<SettingsViewModel>,
     has_switched_tab: Signal<bool>,
@@ -1357,6 +1366,81 @@ fn trigger_update_badge_action(
     }
 }
 
+fn support_section(
+    active_locale: Memo<Locale>,
+    animate: bool,
+    start_index: usize,
+) -> impl IntoElement {
+    view()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_5()
+        .child(
+            view()
+                .flex_1()
+                .gap_3()
+                .child(stagger_item(
+                    start_index,
+                    animate,
+                    section_header(
+                        move || ui_text(active_locale.get()).support_title,
+                        move || ui_text(active_locale.get()).support_caption,
+                    ),
+                ))
+                .child(stagger_item(
+                    start_index + 1,
+                    animate,
+                    text(move || format_support_link_caption(SUPPORT_URL, active_locale.get()))
+                        .text_xs()
+                        .text_color(colors::TEXT_SECONDARY),
+                ))
+                .child(stagger_item(
+                    start_index + 2,
+                    animate,
+                    view().flex_row().child(support_link(move || {
+                        ui_text(active_locale.get()).support_button
+                    })),
+                )),
+        )
+        .child(stagger_item(
+            start_index + 3,
+            animate,
+            support_qr_card(move || ui_text(active_locale.get()).support_qr_caption),
+        ))
+}
+
+#[cfg(feature = "msstore")]
+fn about_section(active_locale: Memo<Locale>, animate: bool) -> impl IntoElement {
+    view()
+        .gap_5()
+        .child(
+            view()
+                .gap_3()
+                .child(stagger_item(
+                    0,
+                    animate,
+                    section_header(
+                        move || ui_text(active_locale.get()).updates_title,
+                        move || ui_text(active_locale.get()).updates_caption,
+                    ),
+                ))
+                .child(stagger_item(
+                    1,
+                    animate,
+                    text(move || {
+                        format_version_summary(env!("CARGO_PKG_VERSION"), None, active_locale.get())
+                    })
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(colors::TEXT_PRIMARY),
+                )),
+        )
+        .child(stagger_item(2, animate, section_divider()))
+        .child(support_section(active_locale, animate, 3))
+}
+
+#[cfg(not(feature = "msstore"))]
 #[expect(
     clippy::too_many_arguments,
     reason = "About section wires update callbacks, active locale, and animation state"
@@ -1529,47 +1613,7 @@ fn about_section(
                 )),
         )
         .child(stagger_item(4, animate, section_divider()))
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap_5()
-                .child(
-                    view()
-                        .flex_1()
-                        .gap_3()
-                        .child(stagger_item(
-                            5,
-                            animate,
-                            section_header(
-                                move || ui_text(active_locale.get()).support_title,
-                                move || ui_text(active_locale.get()).support_caption,
-                            ),
-                        ))
-                        .child(stagger_item(
-                            6,
-                            animate,
-                            text(move || {
-                                format_support_link_caption(SUPPORT_URL, active_locale.get())
-                            })
-                            .text_xs()
-                            .text_color(colors::TEXT_SECONDARY),
-                        ))
-                        .child(stagger_item(
-                            7,
-                            animate,
-                            view().flex_row().child(support_link(move || {
-                                ui_text(active_locale.get()).support_button
-                            })),
-                        )),
-                )
-                .child(stagger_item(
-                    8,
-                    animate,
-                    support_qr_card(move || ui_text(active_locale.get()).support_qr_caption),
-                )),
-        )
+        .child(support_section(active_locale, animate, 5))
 }
 
 fn settings_main_window_options() -> MainWindowOptions {
@@ -1836,6 +1880,7 @@ fn build_settings_view_inner(
         live_status.with(|snap| snap.as_ref().and_then(|s| format_countdown_pill(s, locale)))
     });
 
+    #[cfg(not(feature = "msstore"))]
     let update_ui = UpdateUiState {
         available: signal(update_config.initial_update),
         busy: signal(false),
@@ -1846,9 +1891,14 @@ fn build_settings_view_inner(
             .strategy
             .unwrap_or(UpdateStrategy::ManualDownload),
     };
+    #[cfg(not(feature = "msstore"))]
     let on_check_now = update_config.on_check_now;
+    #[cfg(not(feature = "msstore"))]
     let on_apply_update = update_config.on_apply_update;
+    #[cfg(not(feature = "msstore"))]
     let on_open_download = update_config.on_open_download;
+    #[cfg(feature = "msstore")]
+    drop(update_config);
 
     let active_tab = computed(move || vm.with(|m| m.active_tab));
     let warning_msg = computed(move || vm.with(|m| m.load_warning.clone()));
@@ -1906,6 +1956,7 @@ fn build_settings_view_inner(
     let timing_sink = Arc::clone(&outcome_sink);
     let policies_sink = Arc::clone(&outcome_sink);
     let exercises_sink = Arc::clone(&outcome_sink);
+    #[cfg(not(feature = "msstore"))]
     let about_sink = Arc::clone(&outcome_sink);
     let reset_sink = outcome_sink;
 
@@ -1935,8 +1986,49 @@ fn build_settings_view_inner(
         ));
     }
 
+    #[cfg(not(feature = "msstore"))]
     let badge_apply_cb = on_apply_update.clone();
+    #[cfg(not(feature = "msstore"))]
     let badge_open_cb = on_open_download;
+    let sidebar_footer = view()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .child(
+            text(concat!("v", env!("CARGO_PKG_VERSION")))
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(colors::SIDEBAR_TEXT_MUTED),
+        );
+    #[cfg(not(feature = "msstore"))]
+    let sidebar_footer = sidebar_footer.child(when(
+        move || update_ui.available.get().is_some(),
+        move || {
+            let apply_cb = badge_apply_cb.clone();
+            let open_cb = badge_open_cb.clone();
+            version_update_badge(
+                move || {
+                    update_ui
+                        .available
+                        .get()
+                        .map_or_else(String::new, |info| format!("v{}", info.latest_version))
+                },
+                move || {
+                    trigger_update_badge_action(
+                        vm,
+                        has_switched_tab,
+                        update_ui,
+                        &apply_cb,
+                        &open_cb,
+                        quit_on_finish,
+                    );
+                },
+            )
+        },
+    ));
     let sidebar = view()
         .w(px(210.0))
         .flex_shrink_0()
@@ -1982,45 +2074,7 @@ fn build_settings_view_inner(
                 )
                 .child(sidebar_nav),
         )
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .px_3()
-                .py_1()
-                .child(
-                    text(concat!("v", env!("CARGO_PKG_VERSION")))
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(colors::SIDEBAR_TEXT_MUTED),
-                )
-                .child(when(
-                    move || update_ui.available.get().is_some(),
-                    move || {
-                        let apply_cb = badge_apply_cb.clone();
-                        let open_cb = badge_open_cb.clone();
-                        version_update_badge(
-                            move || {
-                                update_ui.available.get().map_or_else(String::new, |info| {
-                                    format!("v{}", info.latest_version)
-                                })
-                            },
-                            move || {
-                                trigger_update_badge_action(
-                                    vm,
-                                    has_switched_tab,
-                                    update_ui,
-                                    &apply_cb,
-                                    &open_cb,
-                                    quit_on_finish,
-                                );
-                            },
-                        )
-                    },
-                )),
-        );
+        .child(sidebar_footer);
 
     let kpi_row = view()
         .flex_row()
@@ -2264,16 +2318,23 @@ fn build_settings_view_inner(
                 .child(when(
                     move || active_tab.get() == SettingsTab::About,
                     move || {
-                        about_section(
-                            vm,
-                            active_locale,
-                            Arc::clone(&about_sink),
-                            update_ui,
-                            on_check_now.clone(),
-                            on_apply_update.clone(),
-                            quit_on_finish,
-                            has_switched_tab.get_untracked(),
-                        )
+                        #[cfg(feature = "msstore")]
+                        {
+                            about_section(active_locale, has_switched_tab.get_untracked())
+                        }
+                        #[cfg(not(feature = "msstore"))]
+                        {
+                            about_section(
+                                vm,
+                                active_locale,
+                                Arc::clone(&about_sink),
+                                update_ui,
+                                on_check_now.clone(),
+                                on_apply_update.clone(),
+                                quit_on_finish,
+                                has_switched_tab.get_untracked(),
+                            )
+                        }
                     },
                 )),
         );
@@ -2556,6 +2617,7 @@ mod tests {
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[cfg(not(feature = "msstore"))]
     use sye_core::HOMEBREW_UPGRADE_COMMAND;
 
     use super::*;
@@ -3597,6 +3659,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(feature = "msstore"))]
     #[test]
     fn nsh_headless_update_badge_and_controls_flow() -> Result<(), Box<dyn std::error::Error>> {
         use nsh_engine::{EngineConfig, Points, Root, Size};
@@ -3694,6 +3757,74 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "msstore")]
+    #[test]
+    fn nsh_headless_msstore_hides_in_app_updater_and_keeps_support()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use nsh_engine::{EngineConfig, Points, Root, Size};
+        use nsh_testing::Headless;
+
+        let dir = RepoTempDir::new("headless-msstore")?;
+        let config_path = dir.file("msstore.toml");
+        static MSSTORE_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+        if let Ok(mut guard) = MSSTORE_PATH.lock() {
+            *guard = Some(config_path);
+        }
+
+        #[component]
+        fn TestMsStoreSettings() -> impl IntoElement {
+            let path = MSSTORE_PATH
+                .lock()
+                .ok()
+                .and_then(|mut g| g.take())
+                .unwrap_or_default();
+            let vm = SettingsViewModel::load(path);
+            let sink = Arc::new(Mutex::new(None));
+            let update_cfg = SettingsUpdateConfig {
+                initial_update: Some(UpdateInfo {
+                    latest_version: "9.9.9".to_owned(),
+                    download_url: sye_core::PUBLIC_DOWNLOAD_URL.to_owned(),
+                }),
+                strategy: Some(UpdateStrategy::SelfUpdate {
+                    asset_name: "safe-your-eyes-windows-x86_64.exe",
+                }),
+                on_check_now: None,
+                on_apply_update: None,
+                on_open_download: None,
+            };
+            build_settings_view_with_hooks(
+                vm,
+                sink,
+                false,
+                None,
+                ThemeTransitionHooks::default(),
+                update_cfg,
+                SettingsStatusConfig::default(),
+            )
+        }
+
+        let mut app = Headless::start(EngineConfig {
+            viewport: Size::new(Points(920.0), Points(680.0)),
+            ..EngineConfig::new(Root::of::<TestMsStoreSettings>())
+        })
+        .map_err(|e| e.to_string())?;
+        app.wait_for(concat!("v", env!("CARGO_PKG_VERSION")))?;
+        assert!(!app.shows("v9.9.9"));
+
+        app.press("About & Support")?;
+        app.wait_for("Updates are managed by Microsoft Store.")?;
+        assert!(app.shows("Updates"));
+        assert!(app.shows(concat!("Current version: v", env!("CARGO_PKG_VERSION"))));
+        assert!(app.shows("Buy Me a Coffee"));
+        assert!(app.shows("Scan to Buy Me a Coffee"));
+        assert!(!app.shows("Check for Updates"));
+        assert!(!app.shows("Check for updates automatically"));
+        assert!(!app.shows("Update & Restart"));
+        assert!(!app.shows("Download Page"));
+        assert!(!app.shows("Download Update"));
+        Ok(())
+    }
+
     #[test]
     fn may_change_resolved_dark_detects_noop_explicit_modes() {
         assert!(!may_change_resolved_dark(false, ThemeMode::Light, None));
@@ -3724,6 +3855,7 @@ mod tests {
         ));
     }
 
+    #[cfg(not(feature = "msstore"))]
     #[test]
     fn nsh_headless_update_badge_opens_download_page_for_homebrew_cask()
     -> Result<(), Box<dyn std::error::Error>> {

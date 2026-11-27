@@ -18,8 +18,10 @@ const MENU_ID_TAKE_ANY: &str = "sye.take.any";
 const MENU_ID_TAKE_SHORT: &str = "sye.take.short";
 const MENU_ID_TAKE_LONG: &str = "sye.take.long";
 const MENU_ID_SETTINGS: &str = "sye.settings";
+#[cfg(not(feature = "msstore"))]
 const MENU_ID_UPDATE: &str = "sye.update";
 const MENU_ID_QUIT: &str = "sye.quit";
+#[cfg(not(feature = "msstore"))]
 const UPDATE_MENU_INDEX: usize = 6;
 
 struct TrayMenuLabels {
@@ -28,6 +30,7 @@ struct TrayMenuLabels {
     disable_items: [&'static str; 5],
     take_break_submenu: &'static str,
     take_break_items: [&'static str; 3],
+    #[cfg(not(feature = "msstore"))]
     update_default: &'static str,
     settings: &'static str,
     quit: &'static str,
@@ -47,6 +50,7 @@ const fn menu_labels(locale: Locale) -> TrayMenuLabels {
             ],
             take_break_submenu: "Take a break now",
             take_break_items: ["Any break", "Short break", "Long break"],
+            #[cfg(not(feature = "msstore"))]
             update_default: "Update available",
             settings: "Settings",
             quit: "Quit",
@@ -63,6 +67,7 @@ const fn menu_labels(locale: Locale) -> TrayMenuLabels {
             ],
             take_break_submenu: "Nghỉ ngay bây giờ",
             take_break_items: ["Nghỉ bất kỳ", "Nghỉ ngắn", "Nghỉ dài"],
+            #[cfg(not(feature = "msstore"))]
             update_default: "Có bản cập nhật",
             settings: "Cài đặt",
             quit: "Thoát",
@@ -80,9 +85,14 @@ pub enum TrayIconState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayEvent {
     Enable,
-    Disable { minutes: Option<u64> },
-    TakeBreak { kind: Option<BreakType> },
+    Disable {
+        minutes: Option<u64>,
+    },
+    TakeBreak {
+        kind: Option<BreakType>,
+    },
     OpenSettings,
+    #[cfg(not(feature = "msstore"))]
     UpdateApp,
     Reopen,
     Quit,
@@ -94,6 +104,7 @@ struct ActiveTray {
     #[cfg(target_os = "macos")]
     hover_tooltip: macos_hover_tooltip::MacHoverTooltip,
     tray_icon: TrayIcon,
+    #[cfg(not(feature = "msstore"))]
     menu: Menu,
     locale: Locale,
     icon_state: TrayIconState,
@@ -104,9 +115,13 @@ struct ActiveTray {
     disable_items: [MenuItem; 5],
     take_break_submenu: Submenu,
     take_break_items: [MenuItem; 3],
+    #[cfg(not(feature = "msstore"))]
     update_item: MenuItem,
+    #[cfg(not(feature = "msstore"))]
     update_item_visible: bool,
+    #[cfg(not(feature = "msstore"))]
     available_update: Option<String>,
+    #[cfg(not(feature = "msstore"))]
     updating: bool,
     settings_item: MenuItem,
     quit_item: MenuItem,
@@ -189,6 +204,7 @@ impl TrayHandle {
         )
         .map_err(|err| PlatformError::Unavailable(err.to_string()))?;
 
+        #[cfg(not(feature = "msstore"))]
         let update_item = MenuItem::with_id(MENU_ID_UPDATE, labels.update_default, true, None);
         let settings_item = MenuItem::with_id(MENU_ID_SETTINGS, labels.settings, true, None);
         let quit_item = MenuItem::with_id(MENU_ID_QUIT, labels.quit, true, None);
@@ -211,7 +227,10 @@ impl TrayHandle {
         let icon_state = icon_state_for_snapshot(initial);
         let icon = build_tray_icon(icon_state)?;
 
+        #[cfg(not(feature = "msstore"))]
         let builder = TrayIconBuilder::new().with_menu(Box::new(menu.clone()));
+        #[cfg(feature = "msstore")]
+        let builder = TrayIconBuilder::new().with_menu(Box::new(menu));
         let builder = match tray_tooltip_localized(initial, locale) {
             Some(tooltip) => builder.with_tooltip(tooltip),
             None => builder,
@@ -248,6 +267,7 @@ impl TrayHandle {
                 #[cfg(target_os = "macos")]
                 hover_tooltip,
                 tray_icon,
+                #[cfg(not(feature = "msstore"))]
                 menu,
                 locale,
                 icon_state,
@@ -264,9 +284,13 @@ impl TrayHandle {
                 ],
                 take_break_submenu,
                 take_break_items: [take_any, take_short, take_long],
+                #[cfg(not(feature = "msstore"))]
                 update_item,
+                #[cfg(not(feature = "msstore"))]
                 update_item_visible: false,
+                #[cfg(not(feature = "msstore"))]
                 available_update: None,
+                #[cfg(not(feature = "msstore"))]
                 updating: false,
                 settings_item,
                 quit_item,
@@ -310,6 +334,7 @@ impl TrayHandle {
         active.settings_item.set_text(labels.settings);
         active.quit_item.set_text(labels.quit);
 
+        #[cfg(not(feature = "msstore"))]
         if let Some(ver) = active.available_update.as_deref() {
             active
                 .update_item
@@ -333,6 +358,7 @@ impl TrayHandle {
         }
     }
 
+    #[cfg(not(feature = "msstore"))]
     pub fn set_available_update(&mut self, version: Option<&str>, updating: bool) {
         let Some(active) = self.active.as_mut() else {
             return;
@@ -404,6 +430,7 @@ impl TrayHandle {
         for item in &active.take_break_items {
             item.set_enabled(can_take_break);
         }
+        #[cfg(not(feature = "msstore"))]
         active.update_item.set_enabled(unlocked && !active.updating);
         active.settings_item.set_enabled(unlocked);
         active.quit_item.set_enabled(unlocked);
@@ -976,12 +1003,14 @@ pub fn map_menu_id_to_event(id: &str) -> Option<TrayEvent> {
             kind: Some(BreakType::Long),
         }),
         MENU_ID_SETTINGS => Some(TrayEvent::OpenSettings),
+        #[cfg(not(feature = "msstore"))]
         MENU_ID_UPDATE => Some(TrayEvent::UpdateApp),
         MENU_ID_QUIT => Some(TrayEvent::Quit),
         _ => None,
     }
 }
 
+#[cfg(not(feature = "msstore"))]
 #[must_use]
 pub fn format_update_menu_label_localized(version: &str, updating: bool, locale: Locale) -> String {
     let clean = version.trim().trim_start_matches('v');
@@ -1235,21 +1264,27 @@ mod tests {
             map_menu_id_to_event(MENU_ID_SETTINGS),
             Some(TrayEvent::OpenSettings)
         );
+        #[cfg(not(feature = "msstore"))]
         assert_eq!(
             map_menu_id_to_event(MENU_ID_UPDATE),
             Some(TrayEvent::UpdateApp)
         );
+        #[cfg(feature = "msstore")]
+        assert_eq!(map_menu_id_to_event("sye.update"), None);
         assert_eq!(map_menu_id_to_event(MENU_ID_QUIT), Some(TrayEvent::Quit));
         assert_eq!(map_menu_id_to_event(MENU_ID_STATUS), None);
         assert_eq!(map_menu_id_to_event("unknown"), None);
-        assert_eq!(
-            format_update_menu_label_localized("0.2.0", false, Locale::En),
-            "Update available (v0.2.0)"
-        );
-        assert_eq!(
-            format_update_menu_label_localized("v0.2.0", true, Locale::En),
-            "Updating to v0.2.0..."
-        );
+        #[cfg(not(feature = "msstore"))]
+        {
+            assert_eq!(
+                format_update_menu_label_localized("0.2.0", false, Locale::En),
+                "Update available (v0.2.0)"
+            );
+            assert_eq!(
+                format_update_menu_label_localized("v0.2.0", true, Locale::En),
+                "Updating to v0.2.0..."
+            );
+        }
     }
 
     #[test]
@@ -1346,14 +1381,17 @@ mod tests {
             "Chưa cấu hình lịch nghỉ"
         );
 
-        assert_eq!(
-            format_update_menu_label_localized("0.5.0", false, Locale::Vi),
-            "Có bản cập nhật (v0.5.0)"
-        );
-        assert_eq!(
-            format_update_menu_label_localized("v0.5.0", true, Locale::Vi),
-            "Đang cập nhật lên v0.5.0..."
-        );
+        #[cfg(not(feature = "msstore"))]
+        {
+            assert_eq!(
+                format_update_menu_label_localized("0.5.0", false, Locale::Vi),
+                "Có bản cập nhật (v0.5.0)"
+            );
+            assert_eq!(
+                format_update_menu_label_localized("v0.5.0", true, Locale::Vi),
+                "Đang cập nhật lên v0.5.0..."
+            );
+        }
     }
 
     #[test]
