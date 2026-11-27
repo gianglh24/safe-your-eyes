@@ -278,13 +278,20 @@ jobs:
       - name: Prepare checksums and release notes
         env:
           SIGNPATH_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORG_ID != '' && vars.SIGNPATH_POLICY_SLUG != '' }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           cd release-assets
           cat *.sha256 | sort -k2 > SHA256SUMS.txt
           rm -f *.sha256
+          VERSION="${RELEASE_TAG#v}"
+          CHANGES=$(awk -v hdr="## [$VERSION]" 'index($0, hdr) == 1 {f = 1; next} f && /^## \[/ {exit} f' ../CHANGELOG.md)
           {
             echo "## Safe Your Eyes Release"
             echo ""
+            if [ -n "$CHANGES" ]; then
+              echo "$CHANGES"
+              echo ""
+            fi
             echo "### Install on macOS (Homebrew Cask)"
             echo ""
             echo '```bash'
