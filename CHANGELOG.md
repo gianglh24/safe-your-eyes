@@ -2,6 +2,20 @@
 
 All notable changes to Safe Your Eyes are recorded in this file.
 
+## [0.5.1] - 2026-11-27
+
+### Changed
+
+- Pre-break banner: apply the Cozy Design System palette, spacing, rounded shadow, and `Config.theme` (`system`, `light`, or `dark`) on macOS and Windows.
+- Pre-break banner: animate the progress bar continuously instead of stepping once per second, and step once per second when Reduce Motion is on.
+
+### Fixed
+
+- Daemon upgrades: hand off a stale daemon cleanly, wait for the new daemon before opening Settings, and defer idle config reloads during active breaks.
+- Reload `config.toml` locale changes reliably across the tray menu and desktop notifications.
+- macOS: remove faint rectangular corner halos around the rounded pre-break banner.
+- Windows: repaint only the progress bar track when its fill width changes.
+
 ## [0.5.0] - 2026-11-27
 
 ### Added
