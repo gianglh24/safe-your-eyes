@@ -257,7 +257,7 @@ Status banners and destructive buttons pair `warning-muted` / `error-muted` fill
 - The Settings window skips staggered list-item entrances on initial window load and during in-place exercise edits.
 - Cozy Circular Theme Reveal expands a circle from the theme toggle button to the farthest window corner (`480ms`, `cubic-bezier(0.4, 0, 0.2, 1)`) whenever the resolved Light or Dark appearance changes and `reduce_motion()` is `false`.
 - On macOS, the reveal pins a snapshot `CALayer` of the previous theme above the live view tree and animates an even-odd `CAShapeLayer` mask so the window switches with zero blank-frame flash.
-- On Linux and Windows, the reveal uses `nsh`'s `screen_transition()` WGSL shader (`THEME_REVEAL_WGSL`).
+- On Linux and Windows, the reveal wraps the Settings content root in `nsh`'s `shader_transition()` WGSL shader (`THEME_REVEAL_WGSL`).
 - Toggling the theme writes `Config.theme` to `config.toml` immediately without saving unsaved form edits.
 - A theme-only configuration reload keeps the daemon's active break countdown unchanged.
 - Pressable pills scale to `0.97` on press.
@@ -309,7 +309,7 @@ Global options:
 
 Modes and control flags:
 
-- No control flag: Start the single-instance daemon. When the user omits `--headless` and `--background` and macOS did not launch the process as a Login Item (`keyAELaunchedAsLogInItem`), the daemon opens the Settings window after startup and keeps the system tray active. When the Settings window closes after saving changes, the daemon reloads `config.toml` immediately. When the Settings window that opened at startup closes before `Scheduler` leaves its first `Waiting` (a `Resting` from `SmartPause` does not count), the daemon starts that countdown again from its full interval. If a daemon already listens on `--socket`, the CLI sends `IpcCommand::OpenSettings` (unless `--headless` or `--background` is present), prints `Safe Your Eyes is already running` to stdout, and exits with code 0.
+- No control flag: Start the single-instance daemon. When the user omits `--headless` and `--background` and macOS did not launch the process as a Login Item (`keyAELaunchedAsLogInItem`), the daemon opens the Settings window after startup and keeps the system tray active. When the Settings window closes after saving changes, the daemon reloads `config.toml` immediately. If a daemon already listens on `--socket`, the CLI sends `IpcCommand::OpenSettings` (unless `--headless` or `--background` is present), prints `Safe Your Eyes is already running` to stdout, and exits with code 0.
 - `--status`: Print human-readable daemon status to stdout and exit with code 0. If no daemon is running, print `Safe Your Eyes is not running` to stderr and exit with code 1.
 - `--status --json`: Print JSON with `state`, `enabled`, `next_break_type`, `next_break_name`, `seconds_until_next_break`, and `consecutive_skips`.
 - `-e`, `--enable`: Resume the running daemon.
@@ -381,3 +381,5 @@ This section lists the operating system and framework limits that the code works
 3. The engine starts the clock of an animation at its first frame. Frames before the window is shown and sized are lost. The overlay starts its animations after its window is shown.
 4. A width change does not animate per frame. The progress bar scales its fill from the center with one `ScaleX` animation for the whole break.
 5. `set_interval` skips late runs. The overlay calculates the countdown from the clock, not from the number of ticks.
+6. In `nsh` 0.7 window model v2, the app root is a hidden host and `main_window().focus()` does nothing. Both Settings and the primary break overlay open an explicit `desktop::window()` with `QuitMode::LastWindowClosed`. On Linux and Windows, Settings uses `shader_transition()` instead of `screen_transition()` because `screen_transition()` binds to the hidden host root.
+7. In `nsh-core` 0.7.1, `retag()` drops `node.shader` when a component returns a shader as its root element. Settings nests `shader_transition()` under a `view()` so `create()` allocates its shader state.
