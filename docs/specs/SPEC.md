@@ -255,7 +255,9 @@ Status banners and destructive buttons pair `warning-muted` / `error-muted` fill
 - `COZY_SPRING` (`stiffness: 420`, `damping: 32`, `mass: 0.9`) moves the sliding sidebar indicator and the centered switch knob (`3pt` symmetrical inset, `18pt` horizontal travel).
 - `COZY_EASE` (`cubic-bezier(0.22, 1, 0.36, 1)`) drives staggered list-item entrances on tab switch (`10px` rise, `260ms`, `28ms` step capped at row 12), overlay dialog scale-in (`0.98 -> 1.0`, `200ms`), and highlighter sweeps (`380ms`).
 - The Settings window skips staggered list-item entrances on initial window load and during in-place exercise edits.
-- Theme switching uses native `transition_colors` (`200ms`, `cubic-bezier(0.4, 0, 0.2, 1)`) on Cozy surfaces so appearance changes render without a blank-frame flash.
+- Cozy Circular Theme Reveal expands a circle from the theme toggle button to the farthest window corner (`480ms`, `cubic-bezier(0.4, 0, 0.2, 1)`) whenever the resolved Light or Dark appearance changes and `reduce_motion()` is `false`.
+- On macOS, the reveal pins a snapshot `CALayer` of the previous theme above the live view tree and animates an even-odd `CAShapeLayer` mask so the window switches with zero blank-frame flash.
+- On Linux and Windows, the reveal uses `nsh`'s `screen_transition()` WGSL shader (`THEME_REVEAL_WGSL`).
 - Toggling the theme writes `Config.theme` to `config.toml` immediately without saving unsaved form edits.
 - A theme-only configuration reload keeps the daemon's active break countdown unchanged.
 - Pressable pills scale to `0.97` on press.
@@ -342,7 +344,7 @@ This section lists the operating system and framework limits that the code works
 11. `UNUserNotificationCenter` shows a new animated banner for each countdown update, and temporary banners hide after about 5 seconds. `OsNotifier` uses its own `NSPanel` banner instead.
 12. A panel that is released inside its own `mouseDown:` handler frees the object that runs the handler. The banner hides first and releases the panel later. The banner accepts the first mouse click, so one click dismisses it while another app is active.
 13. `NSApplication::activate()` has no effect after the tray menu closes. The Settings window requests `Activation::Take` at first display and again after AppKit ends menu tracking.
-14. The Settings window passes the saved theme to `Root`, not to `AppOptions`. This keeps the real system color scheme available for the System theme.
+14. The Settings window passes the saved theme to `Root` and `AppOptions` to avoid a first-frame flash, and resets the `NSApplication` and `NSWindow` appearance to `None` when switching back to `System` so the window follows the operating system color scheme.
 15. A native titled window without `NSToolbar` has a 16pt corner radius. The Cozy radius scale and the 8pt outer Settings padding use this value.
 16. `launchd` can stop the process when `launchctl` removes a running job. `sye-platform` deletes the legacy plist before it runs `launchctl`.
 17. A LaunchAgent plist without `AssociatedBundleIdentifiers` shows no app icon in System Settings. The fallback plist sets this key to the bundle identifier.
