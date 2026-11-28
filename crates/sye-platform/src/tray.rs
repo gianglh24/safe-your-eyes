@@ -1,7 +1,7 @@
 use std::fmt;
 use std::sync::mpsc::Sender;
 
-use sye_core::{BreakType, PlatformError, SchedulerState, TraySnapshot};
+use sye_core::{BreakType, Locale, PlatformError, SchedulerState, TraySnapshot};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
@@ -18,9 +18,62 @@ const MENU_ID_TAKE_ANY: &str = "sye.take.any";
 const MENU_ID_TAKE_SHORT: &str = "sye.take.short";
 const MENU_ID_TAKE_LONG: &str = "sye.take.long";
 const MENU_ID_SETTINGS: &str = "sye.settings";
+#[cfg(not(feature = "msstore"))]
 const MENU_ID_UPDATE: &str = "sye.update";
 const MENU_ID_QUIT: &str = "sye.quit";
+#[cfg(not(feature = "msstore"))]
 const UPDATE_MENU_INDEX: usize = 6;
+
+struct TrayMenuLabels {
+    enable: &'static str,
+    disable_submenu: &'static str,
+    disable_items: [&'static str; 5],
+    take_break_submenu: &'static str,
+    take_break_items: [&'static str; 3],
+    #[cfg(not(feature = "msstore"))]
+    update_default: &'static str,
+    settings: &'static str,
+    quit: &'static str,
+}
+
+const fn menu_labels(locale: Locale) -> TrayMenuLabels {
+    match locale {
+        Locale::En => TrayMenuLabels {
+            enable: "Enable Safe Your Eyes",
+            disable_submenu: "Disable Safe Your Eyes",
+            disable_items: [
+                "For 30 minutes",
+                "For 1 hour",
+                "For 2 hours",
+                "For 3 hours",
+                "Until restart",
+            ],
+            take_break_submenu: "Take a break now",
+            take_break_items: ["Any break", "Short break", "Long break"],
+            #[cfg(not(feature = "msstore"))]
+            update_default: "Update available",
+            settings: "Settings",
+            quit: "Quit",
+        },
+        Locale::Vi => TrayMenuLabels {
+            enable: "Bật Safe Your Eyes",
+            disable_submenu: "Tắt Safe Your Eyes",
+            disable_items: [
+                "Trong 30 phút",
+                "Trong 1 giờ",
+                "Trong 2 giờ",
+                "Trong 3 giờ",
+                "Đến khi khởi động lại",
+            ],
+            take_break_submenu: "Nghỉ ngay bây giờ",
+            take_break_items: ["Nghỉ bất kỳ", "Nghỉ ngắn", "Nghỉ dài"],
+            #[cfg(not(feature = "msstore"))]
+            update_default: "Có bản cập nhật",
+            settings: "Cài đặt",
+            quit: "Thoát",
+        },
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayIconState {
@@ -32,9 +85,14 @@ pub enum TrayIconState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayEvent {
     Enable,
-    Disable { minutes: Option<u64> },
-    TakeBreak { kind: Option<BreakType> },
+    Disable {
+        minutes: Option<u64>,
+    },
+    TakeBreak {
+        kind: Option<BreakType>,
+    },
     OpenSettings,
+    #[cfg(not(feature = "msstore"))]
     UpdateApp,
     Reopen,
     Quit,
@@ -46,7 +104,9 @@ struct ActiveTray {
     #[cfg(target_os = "macos")]
     hover_tooltip: macos_hover_tooltip::MacHoverTooltip,
     tray_icon: TrayIcon,
+    #[cfg(not(feature = "msstore"))]
     menu: Menu,
+    locale: Locale,
     icon_state: TrayIconState,
     last_snapshot: Option<TraySnapshot>,
     status_item: MenuItem,
@@ -55,28 +115,34 @@ struct ActiveTray {
     disable_items: [MenuItem; 5],
     take_break_submenu: Submenu,
     take_break_items: [MenuItem; 3],
+    #[cfg(not(feature = "msstore"))]
     update_item: MenuItem,
+    #[cfg(not(feature = "msstore"))]
     update_item_visible: bool,
+    #[cfg(not(feature = "msstore"))]
     available_update: Option<String>,
+    #[cfg(not(feature = "msstore"))]
     updating: bool,
     settings_item: MenuItem,
     quit_item: MenuItem,
 }
 
 pub struct TrayHandle {
-    active: Option<ActiveTray>,
+    active: ActiveTray,
 }
 
 impl fmt::Debug for TrayHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TrayHandle")
-            .field("available", &self.active.is_some())
-            .finish()
+        f.debug_struct("TrayHandle").finish_non_exhaustive()
     }
 }
 
 impl TrayHandle {
-    pub fn try_new(initial: &TraySnapshot, tx: Sender<TrayEvent>) -> Result<Self, PlatformError> {
+    pub fn try_new_with_locale(
+        initial: &TraySnapshot,
+        locale: Locale,
+        tx: Sender<TrayEvent>,
+    ) -> Result<Self, PlatformError> {
         #[cfg(target_os = "macos")]
         if std::thread::current().name() != Some("main") {
             return Err(PlatformError::Unavailable(
@@ -85,24 +151,34 @@ impl TrayHandle {
         }
 
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Self::try_new_inner(initial, tx)
+            Self::try_new_inner(initial, locale, tx)
         }))
         .map_err(|_| PlatformError::Unavailable("system tray initialization panicked".to_owned()))?
     }
 
-    fn try_new_inner(initial: &TraySnapshot, tx: Sender<TrayEvent>) -> Result<Self, PlatformError> {
-        let status_item =
-            MenuItem::with_id(MENU_ID_STATUS, format_status_label(initial), false, None);
-        let enable_item = MenuItem::with_id(MENU_ID_ENABLE, "Enable Safe Your Eyes", true, None);
+    fn try_new_inner(
+        initial: &TraySnapshot,
+        locale: Locale,
+        tx: Sender<TrayEvent>,
+    ) -> Result<Self, PlatformError> {
+        let labels = menu_labels(locale);
+        let status_item = MenuItem::with_id(
+            MENU_ID_STATUS,
+            format_status_label_localized(initial, locale),
+            false,
+            None,
+        );
+        let enable_item = MenuItem::with_id(MENU_ID_ENABLE, labels.enable, true, None);
 
-        let disable_30m = MenuItem::with_id(MENU_ID_DISABLE_30M, "For 30 minutes", true, None);
-        let disable_1h = MenuItem::with_id(MENU_ID_DISABLE_1H, "For 1 hour", true, None);
-        let disable_2h = MenuItem::with_id(MENU_ID_DISABLE_2H, "For 2 hours", true, None);
-        let disable_3h = MenuItem::with_id(MENU_ID_DISABLE_3H, "For 3 hours", true, None);
+        let disable_30m =
+            MenuItem::with_id(MENU_ID_DISABLE_30M, labels.disable_items[0], true, None);
+        let disable_1h = MenuItem::with_id(MENU_ID_DISABLE_1H, labels.disable_items[1], true, None);
+        let disable_2h = MenuItem::with_id(MENU_ID_DISABLE_2H, labels.disable_items[2], true, None);
+        let disable_3h = MenuItem::with_id(MENU_ID_DISABLE_3H, labels.disable_items[3], true, None);
         let disable_forever =
-            MenuItem::with_id(MENU_ID_DISABLE_FOREVER, "Until restart", true, None);
+            MenuItem::with_id(MENU_ID_DISABLE_FOREVER, labels.disable_items[4], true, None);
         let disable_submenu = Submenu::with_items(
-            "Disable Safe Your Eyes",
+            labels.disable_submenu,
             true,
             &[
                 &disable_30m,
@@ -114,19 +190,22 @@ impl TrayHandle {
         )
         .map_err(|err| PlatformError::Unavailable(err.to_string()))?;
 
-        let take_any = MenuItem::with_id(MENU_ID_TAKE_ANY, "Any break", true, None);
-        let take_short = MenuItem::with_id(MENU_ID_TAKE_SHORT, "Short break", true, None);
-        let take_long = MenuItem::with_id(MENU_ID_TAKE_LONG, "Long break", true, None);
+        let take_any = MenuItem::with_id(MENU_ID_TAKE_ANY, labels.take_break_items[0], true, None);
+        let take_short =
+            MenuItem::with_id(MENU_ID_TAKE_SHORT, labels.take_break_items[1], true, None);
+        let take_long =
+            MenuItem::with_id(MENU_ID_TAKE_LONG, labels.take_break_items[2], true, None);
         let take_break_submenu = Submenu::with_items(
-            "Take a break now",
+            labels.take_break_submenu,
             true,
             &[&take_any, &take_short, &take_long],
         )
         .map_err(|err| PlatformError::Unavailable(err.to_string()))?;
 
-        let update_item = MenuItem::with_id(MENU_ID_UPDATE, "Update available", true, None);
-        let settings_item = MenuItem::with_id(MENU_ID_SETTINGS, "Settings", true, None);
-        let quit_item = MenuItem::with_id(MENU_ID_QUIT, "Quit", true, None);
+        #[cfg(not(feature = "msstore"))]
+        let update_item = MenuItem::with_id(MENU_ID_UPDATE, labels.update_default, true, None);
+        let settings_item = MenuItem::with_id(MENU_ID_SETTINGS, labels.settings, true, None);
+        let quit_item = MenuItem::with_id(MENU_ID_QUIT, labels.quit, true, None);
 
         let sep1 = PredefinedMenuItem::separator();
         let sep2 = PredefinedMenuItem::separator();
@@ -146,8 +225,11 @@ impl TrayHandle {
         let icon_state = icon_state_for_snapshot(initial);
         let icon = build_tray_icon(icon_state)?;
 
+        #[cfg(not(feature = "msstore"))]
         let builder = TrayIconBuilder::new().with_menu(Box::new(menu.clone()));
-        let builder = match tray_tooltip(initial) {
+        #[cfg(feature = "msstore")]
+        let builder = TrayIconBuilder::new().with_menu(Box::new(menu));
+        let builder = match tray_tooltip_localized(initial, locale) {
             Some(tooltip) => builder.with_tooltip(tooltip),
             None => builder,
         };
@@ -171,18 +253,21 @@ impl TrayHandle {
         #[cfg(target_os = "macos")]
         let menu_timer = macos_menu_timer::MacMenuTimer::new(
             initial,
+            locale,
             status_item.clone(),
             hover_tooltip.shared_panel(),
         );
 
         let mut handle = Self {
-            active: Some(ActiveTray {
+            active: ActiveTray {
                 #[cfg(target_os = "macos")]
                 menu_timer,
                 #[cfg(target_os = "macos")]
                 hover_tooltip,
                 tray_icon,
+                #[cfg(not(feature = "msstore"))]
                 menu,
+                locale,
                 icon_state,
                 last_snapshot: None,
                 status_item,
@@ -197,32 +282,71 @@ impl TrayHandle {
                 ],
                 take_break_submenu,
                 take_break_items: [take_any, take_short, take_long],
+                #[cfg(not(feature = "msstore"))]
                 update_item,
+                #[cfg(not(feature = "msstore"))]
                 update_item_visible: false,
+                #[cfg(not(feature = "msstore"))]
                 available_update: None,
+                #[cfg(not(feature = "msstore"))]
                 updating: false,
                 settings_item,
                 quit_item,
-            }),
+            },
         };
         handle.update(initial)?;
         Ok(handle)
     }
 
-    #[must_use]
-    pub const fn unavailable() -> Self {
-        Self { active: None }
-    }
-
-    #[must_use]
-    pub const fn is_available(&self) -> bool {
-        self.active.is_some()
-    }
-
-    pub fn set_available_update(&mut self, version: Option<&str>, updating: bool) {
-        let Some(active) = self.active.as_mut() else {
+    pub fn set_locale(&mut self, locale: Locale) {
+        let active = &mut self.active;
+        if active.locale == locale {
             return;
-        };
+        }
+        active.locale = locale;
+
+        let labels = menu_labels(locale);
+        active.enable_item.set_text(labels.enable);
+        active.disable_submenu.set_text(labels.disable_submenu);
+        for (item, text) in active.disable_items.iter().zip(labels.disable_items) {
+            item.set_text(text);
+        }
+        active
+            .take_break_submenu
+            .set_text(labels.take_break_submenu);
+        for (item, text) in active.take_break_items.iter().zip(labels.take_break_items) {
+            item.set_text(text);
+        }
+        active.settings_item.set_text(labels.settings);
+        active.quit_item.set_text(labels.quit);
+
+        #[cfg(not(feature = "msstore"))]
+        if let Some(ver) = active.available_update.as_deref() {
+            active
+                .update_item
+                .set_text(format_update_menu_label_localized(
+                    ver,
+                    active.updating,
+                    locale,
+                ));
+        } else {
+            active.update_item.set_text(labels.update_default);
+        }
+
+        if let Some(snapshot) = active.last_snapshot {
+            let status_label = format_status_label_localized(&snapshot, locale);
+            #[cfg(target_os = "macos")]
+            active.menu_timer.update(&snapshot, locale, &status_label);
+            active.status_item.set_text(status_label);
+            if let Some(tooltip) = tray_tooltip_localized(&snapshot, locale) {
+                let _ = active.tray_icon.set_tooltip(Some(tooltip));
+            }
+        }
+    }
+
+    #[cfg(not(feature = "msstore"))]
+    pub fn set_available_update(&mut self, version: Option<&str>, updating: bool) {
+        let active = &mut self.active;
         let next_version = version.map(str::to_owned);
         if active.available_update == next_version && active.updating == updating {
             return;
@@ -238,7 +362,11 @@ impl TrayHandle {
         if let Some(ver) = active.available_update.as_deref() {
             active
                 .update_item
-                .set_text(format_update_menu_label(ver, active.updating));
+                .set_text(format_update_menu_label_localized(
+                    ver,
+                    active.updating,
+                    active.locale,
+                ));
             active.update_item.set_enabled(unlocked && !active.updating);
             if !active.update_item_visible
                 && active
@@ -254,18 +382,19 @@ impl TrayHandle {
     }
 
     pub fn update(&mut self, snapshot: &TraySnapshot) -> Result<(), PlatformError> {
-        let Some(active) = self.active.as_mut() else {
-            return Ok(());
-        };
+        let active = &mut self.active;
+        let locale = active.locale;
         #[cfg(target_os = "macos")]
-        active.hover_tooltip.poll(&active.tray_icon, snapshot);
+        active
+            .hover_tooltip
+            .poll(&active.tray_icon, snapshot, locale);
         if !should_apply_snapshot(&mut active.last_snapshot, snapshot) {
             return Ok(());
         }
 
-        let status_label = format_status_label(snapshot);
+        let status_label = format_status_label_localized(snapshot, locale);
         #[cfg(target_os = "macos")]
-        active.menu_timer.update(snapshot, &status_label);
+        active.menu_timer.update(snapshot, locale, &status_label);
         active.status_item.set_text(status_label);
 
         let unlocked = !snapshot.menu_locked;
@@ -283,11 +412,12 @@ impl TrayHandle {
         for item in &active.take_break_items {
             item.set_enabled(can_take_break);
         }
+        #[cfg(not(feature = "msstore"))]
         active.update_item.set_enabled(unlocked && !active.updating);
         active.settings_item.set_enabled(unlocked);
         active.quit_item.set_enabled(unlocked);
 
-        if let Some(tooltip) = tray_tooltip(snapshot) {
+        if let Some(tooltip) = tray_tooltip_localized(snapshot, locale) {
             let _ = active.tray_icon.set_tooltip(Some(tooltip));
         }
 
@@ -314,7 +444,7 @@ pub(crate) fn should_apply_snapshot(
     if last_snapshot.as_ref() == Some(next) {
         return false;
     }
-    *last_snapshot = Some(next.clone());
+    *last_snapshot = Some(*next);
     true
 }
 
@@ -324,7 +454,7 @@ pub(crate) fn advance_snapshot_countdown(
     snapshot: &TraySnapshot,
     elapsed_secs: u64,
 ) -> TraySnapshot {
-    let mut live = snapshot.clone();
+    let mut live = *snapshot;
     if live.enabled
         && matches!(
             live.state,
@@ -434,6 +564,9 @@ pub(crate) fn compute_macos_tooltip_origin(
 }
 
 #[cfg(target_os = "macos")]
+pub(crate) use macos_hover_tooltip::ns_rect_to_screen_rect;
+
+#[cfg(target_os = "macos")]
 #[expect(
     unsafe_code,
     reason = "Borderless non-activating AppKit tooltip window and NSMenu tracking observer"
@@ -458,11 +591,12 @@ mod macos_hover_tooltip {
     use objc2_foundation::{
         NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
     };
-    use sye_core::{SchedulerState, TraySnapshot};
+    use sye_core::{Locale, SchedulerState, TraySnapshot};
     use tray_icon::TrayIcon;
 
     use super::{
-        HoverGate, ScreenRect, compute_macos_tooltip_origin, format_tooltip, is_status_item_hovered,
+        HoverGate, ScreenRect, compute_macos_tooltip_origin, format_tooltip_localized,
+        is_status_item_hovered,
     };
 
     const PAD_X: f64 = 8.0;
@@ -638,7 +772,12 @@ mod macos_hover_tooltip {
             Rc::clone(&self.panel)
         }
 
-        pub(super) fn poll(&mut self, tray_icon: &TrayIcon, snapshot: &TraySnapshot) {
+        pub(super) fn poll(
+            &mut self,
+            tray_icon: &TrayIcon,
+            snapshot: &TraySnapshot,
+            locale: Locale,
+        ) {
             let Some(mtm) = MainThreadMarker::new() else {
                 return;
             };
@@ -666,7 +805,7 @@ mod macos_hover_tooltip {
                     return;
                 };
                 if let Ok(mut guard) = self.panel.try_borrow_mut() {
-                    let tooltip = format_tooltip(snapshot);
+                    let tooltip = format_tooltip_localized(snapshot, locale);
                     let win = guard.get_or_insert_with(|| TooltipWindow::new(mtm));
                     win.show_at(&tooltip, icon, screen_frame);
                 }
@@ -687,7 +826,7 @@ mod macos_hover_tooltip {
         }
     }
 
-    fn ns_rect_to_screen_rect(rect: NSRect) -> ScreenRect {
+    pub(crate) fn ns_rect_to_screen_rect(rect: NSRect) -> ScreenRect {
         ScreenRect {
             x: rect.origin.x,
             y: rect.origin.y,
@@ -733,14 +872,15 @@ mod macos_menu_timer {
     use objc2::rc::{Retained, autoreleasepool};
     use objc2_app_kit::NSEventTrackingRunLoopMode;
     use objc2_foundation::{NSRunLoop, NSTimer};
-    use sye_core::TraySnapshot;
+    use sye_core::{Locale, TraySnapshot};
     use tray_icon::menu::MenuItem;
 
     use super::macos_hover_tooltip::SharedTooltipPanel;
-    use super::{advance_snapshot_countdown, format_status_label};
+    use super::{advance_snapshot_countdown, format_status_label_localized};
 
     struct MacMenuLiveState {
         snapshot: TraySnapshot,
+        locale: Locale,
         updated_at: Instant,
         last_label: String,
         status_item: MenuItem,
@@ -754,13 +894,15 @@ mod macos_menu_timer {
     impl MacMenuTimer {
         pub(super) fn new(
             initial: &TraySnapshot,
+            locale: Locale,
             status_item: MenuItem,
             tooltip_panel: SharedTooltipPanel,
         ) -> Self {
             let state = Rc::new(RefCell::new(MacMenuLiveState {
-                snapshot: initial.clone(),
+                snapshot: *initial,
+                locale,
                 updated_at: Instant::now(),
-                last_label: format_status_label(initial),
+                last_label: format_status_label_localized(initial, locale),
                 status_item,
             }));
             let timer_state = Rc::clone(&state);
@@ -774,7 +916,7 @@ mod macos_menu_timer {
                     };
                     let elapsed_secs = guard.updated_at.elapsed().as_secs();
                     let live = advance_snapshot_countdown(&guard.snapshot, elapsed_secs);
-                    let label = format_status_label(&live);
+                    let label = format_status_label_localized(&live, guard.locale);
                     if label != guard.last_label {
                         guard.last_label.clone_from(&label);
                         let item = guard.status_item.clone();
@@ -797,9 +939,10 @@ mod macos_menu_timer {
             Self { state, timer }
         }
 
-        pub(super) fn update(&self, snapshot: &TraySnapshot, label: &str) {
+        pub(super) fn update(&self, snapshot: &TraySnapshot, locale: Locale, label: &str) {
             if let Ok(mut guard) = self.state.try_borrow_mut() {
-                guard.snapshot = snapshot.clone();
+                guard.snapshot = *snapshot;
+                guard.locale = locale;
                 guard.updated_at = Instant::now();
                 guard.last_label.clear();
                 guard.last_label.push_str(label);
@@ -845,71 +988,111 @@ pub fn map_menu_id_to_event(id: &str) -> Option<TrayEvent> {
             kind: Some(BreakType::Long),
         }),
         MENU_ID_SETTINGS => Some(TrayEvent::OpenSettings),
+        #[cfg(not(feature = "msstore"))]
         MENU_ID_UPDATE => Some(TrayEvent::UpdateApp),
         MENU_ID_QUIT => Some(TrayEvent::Quit),
         _ => None,
     }
 }
 
+#[cfg(not(feature = "msstore"))]
 #[must_use]
-pub fn format_update_menu_label(version: &str, updating: bool) -> String {
+pub fn format_update_menu_label_localized(version: &str, updating: bool, locale: Locale) -> String {
     let clean = version.trim().trim_start_matches('v');
-    if updating {
-        format!("Updating to v{clean}...")
-    } else {
-        format!("Update available (v{clean})")
+    match (locale, updating) {
+        (Locale::En, true) => format!("Updating to v{clean}..."),
+        (Locale::En, false) => format!("Update available (v{clean})"),
+        (Locale::Vi, true) => format!("Đang cập nhật lên v{clean}..."),
+        (Locale::Vi, false) => format!("Có bản cập nhật (v{clean})"),
     }
 }
 
 #[must_use]
-pub fn format_status_label(snapshot: &TraySnapshot) -> String {
+pub fn format_status_label_localized(snapshot: &TraySnapshot, locale: Locale) -> String {
     if !snapshot.has_breaks {
-        return "No breaks configured".to_owned();
-    }
-    if !snapshot.enabled || snapshot.state == SchedulerState::Stopped {
-        return match snapshot.disabled_until_unix_secs {
-            Some(_) => "Disabled (timed)".to_owned(),
-            None => "Disabled until restart".to_owned(),
+        return match locale {
+            Locale::En => "No breaks configured".to_owned(),
+            Locale::Vi => "Chưa cấu hình lịch nghỉ".to_owned(),
         };
     }
-
-    match snapshot.state {
-        SchedulerState::Waiting => {
-            let kind = match snapshot.next_break_type {
-                Some(BreakType::Short) => "short break",
-                Some(BreakType::Long) => "long break",
-                None => "break",
-            };
+    match (snapshot.enabled, snapshot.state) {
+        (false, _) | (true, SchedulerState::Stopped) => {
+            match (locale, snapshot.disabled_until_unix_secs) {
+                (Locale::En, Some(_)) => "Disabled (timed)".to_owned(),
+                (Locale::En, None) => "Disabled until restart".to_owned(),
+                (Locale::Vi, Some(_)) => "Đang tạm tắt (có hẹn giờ)".to_owned(),
+                (Locale::Vi, None) => "Tắt đến khi khởi động lại".to_owned(),
+            }
+        }
+        (true, SchedulerState::Waiting) => {
             let mins = snapshot.seconds_until_next_break / 60;
             let secs = snapshot.seconds_until_next_break % 60;
-            format!("Next {kind} in {mins:02}:{secs:02}")
+            match locale {
+                Locale::En => {
+                    let kind = match snapshot.next_break_type {
+                        Some(BreakType::Short) => "short break",
+                        Some(BreakType::Long) => "long break",
+                        None => "break",
+                    };
+                    format!("Next {kind} in {mins:02}:{secs:02}")
+                }
+                Locale::Vi => {
+                    let kind = match snapshot.next_break_type {
+                        Some(BreakType::Short) => "Nghỉ ngắn",
+                        Some(BreakType::Long) => "Nghỉ dài",
+                        None => "Lần nghỉ tới",
+                    };
+                    format!("{kind} sau {mins:02}:{secs:02}")
+                }
+            }
         }
-        SchedulerState::PreBreak => {
+        (true, SchedulerState::PreBreak) => {
             let mins = snapshot.seconds_until_next_break / 60;
             let secs = snapshot.seconds_until_next_break % 60;
-            format!("Break starting in {mins:02}:{secs:02}")
+            match locale {
+                Locale::En => format!("Break starting in {mins:02}:{secs:02}"),
+                Locale::Vi => format!("Sắp nghỉ sau {mins:02}:{secs:02}"),
+            }
         }
-        SchedulerState::Break => "Break in progress".to_owned(),
-        SchedulerState::Resting => "Paused (idle/resting)".to_owned(),
-        SchedulerState::Start => "Starting...".to_owned(),
-        SchedulerState::Stopped => "Disabled".to_owned(),
-        SchedulerState::Quit => "Quitting...".to_owned(),
+        (true, SchedulerState::Break) => match locale {
+            Locale::En => "Break in progress".to_owned(),
+            Locale::Vi => "Đang trong giờ nghỉ".to_owned(),
+        },
+        (true, SchedulerState::Resting) => match locale {
+            Locale::En => "Paused (idle/resting)".to_owned(),
+            Locale::Vi => "Tạm dừng (đang nghỉ)".to_owned(),
+        },
+        (true, SchedulerState::Start) => match locale {
+            Locale::En => "Initializing".to_owned(),
+            Locale::Vi => "Đang khởi tạo".to_owned(),
+        },
+        (true, SchedulerState::Quit) => match locale {
+            Locale::En => "Quitting...".to_owned(),
+            Locale::Vi => "Đang thoát...".to_owned(),
+        },
     }
 }
 
 #[must_use]
-pub fn format_tooltip(snapshot: &TraySnapshot) -> String {
-    format!("Safe Your Eyes — {}", format_status_label(snapshot))
+pub fn format_tooltip_localized(snapshot: &TraySnapshot, locale: Locale) -> String {
+    format!(
+        "Safe Your Eyes — {}",
+        format_status_label_localized(snapshot, locale)
+    )
 }
 
 #[must_use]
-pub fn tray_tooltip(snapshot: &TraySnapshot) -> Option<String> {
-    tray_tooltip_for_platform(snapshot, cfg!(target_os = "macos"))
+pub fn tray_tooltip_localized(snapshot: &TraySnapshot, locale: Locale) -> Option<String> {
+    tray_tooltip_for_platform_localized(snapshot, cfg!(target_os = "macos"), locale)
 }
 
 #[must_use]
-pub fn tray_tooltip_for_platform(snapshot: &TraySnapshot, is_macos: bool) -> Option<String> {
-    (!is_macos).then(|| format_tooltip(snapshot))
+pub fn tray_tooltip_for_platform_localized(
+    snapshot: &TraySnapshot,
+    is_macos: bool,
+    locale: Locale,
+) -> Option<String> {
+    (!is_macos).then(|| format_tooltip_localized(snapshot, locale))
 }
 
 fn build_tray_icon(state: TrayIconState) -> Result<Icon, PlatformError> {
@@ -932,22 +1115,14 @@ pub fn render_tray_icon_rgba(state: TrayIconState, template: bool) -> (Vec<u8>, 
         (true, TrayIconState::PreBreak) => TEMPLATE_PRE_BREAK_RLE,
         (true, TrayIconState::Disabled) => TEMPLATE_DISABLED_RLE,
     };
-    (decode_rle_rgba(encoded), ICON_SIZE, ICON_SIZE)
+    (
+        sye_core::decode_rle_rgba(encoded, ICON_RGBA_LEN),
+        ICON_SIZE,
+        ICON_SIZE,
+    )
 }
 
 const ICON_RGBA_LEN: usize = (ICON_SIZE as usize) * (ICON_SIZE as usize) * 4;
-
-fn decode_rle_rgba(encoded: &[u8]) -> Vec<u8> {
-    let mut pixels = Vec::with_capacity(ICON_RGBA_LEN);
-    for &[count, r, g, b, a] in encoded.as_chunks::<5>().0 {
-        let rgba = [r, g, b, a];
-        for _ in 0..usize::from(count) {
-            pixels.extend_from_slice(&rgba);
-        }
-    }
-    pixels.resize(ICON_RGBA_LEN, 0);
-    pixels
-}
 
 #[cfg(test)]
 mod tests {
@@ -962,10 +1137,8 @@ mod tests {
             has_breaks: true,
             menu_locked: false,
             next_break_type: Some(BreakType::Short),
-            next_break_name: Some("Blink".to_owned()),
             seconds_until_next_break: 890,
             disabled_until_unix_secs: None,
-            consecutive_skips: 0,
         }
     }
 
@@ -1061,69 +1234,141 @@ mod tests {
             map_menu_id_to_event(MENU_ID_SETTINGS),
             Some(TrayEvent::OpenSettings)
         );
+        #[cfg(not(feature = "msstore"))]
         assert_eq!(
             map_menu_id_to_event(MENU_ID_UPDATE),
             Some(TrayEvent::UpdateApp)
         );
+        #[cfg(feature = "msstore")]
+        assert_eq!(map_menu_id_to_event("sye.update"), None);
         assert_eq!(map_menu_id_to_event(MENU_ID_QUIT), Some(TrayEvent::Quit));
         assert_eq!(map_menu_id_to_event(MENU_ID_STATUS), None);
         assert_eq!(map_menu_id_to_event("unknown"), None);
-        assert_eq!(
-            format_update_menu_label("0.2.0", false),
-            "Update available (v0.2.0)"
-        );
-        assert_eq!(
-            format_update_menu_label("v0.2.0", true),
-            "Updating to v0.2.0..."
-        );
+        #[cfg(not(feature = "msstore"))]
+        {
+            assert_eq!(
+                format_update_menu_label_localized("0.2.0", false, Locale::En),
+                "Update available (v0.2.0)"
+            );
+            assert_eq!(
+                format_update_menu_label_localized("v0.2.0", true, Locale::En),
+                "Updating to v0.2.0..."
+            );
+        }
     }
 
     #[test]
     fn status_and_tooltip_format_all_scheduler_states() {
         let waiting = sample_snapshot(SchedulerState::Waiting, true);
         assert_eq!(
-            format_tooltip(&waiting),
+            format_tooltip_localized(&waiting, Locale::En),
             "Safe Your Eyes — Next short break in 14:50"
         );
-        assert_eq!(tray_tooltip_for_platform(&waiting, true), None);
         assert_eq!(
-            tray_tooltip_for_platform(&waiting, false).as_deref(),
+            tray_tooltip_for_platform_localized(&waiting, true, Locale::En),
+            None
+        );
+        assert_eq!(
+            tray_tooltip_for_platform_localized(&waiting, false, Locale::En).as_deref(),
             Some("Safe Your Eyes — Next short break in 14:50")
         );
         assert_eq!(icon_state_for_snapshot(&waiting), TrayIconState::Enabled);
 
         let mut pre = sample_snapshot(SchedulerState::PreBreak, true);
         pre.seconds_until_next_break = 10;
-        assert_eq!(format_status_label(&pre), "Break starting in 00:10");
+        assert_eq!(
+            format_status_label_localized(&pre, Locale::En),
+            "Break starting in 00:10"
+        );
         assert_eq!(icon_state_for_snapshot(&pre), TrayIconState::PreBreak);
 
         let resting = sample_snapshot(SchedulerState::Resting, true);
-        assert_eq!(format_status_label(&resting), "Paused (idle/resting)");
+        assert_eq!(
+            format_status_label_localized(&resting, Locale::En),
+            "Paused (idle/resting)"
+        );
 
         let mut stopped = sample_snapshot(SchedulerState::Stopped, false);
-        assert_eq!(format_status_label(&stopped), "Disabled until restart");
+        assert_eq!(
+            format_status_label_localized(&stopped, Locale::En),
+            "Disabled until restart"
+        );
         assert_eq!(icon_state_for_snapshot(&stopped), TrayIconState::Disabled);
 
         stopped.disabled_until_unix_secs = Some(1_800_000_000);
-        assert_eq!(format_status_label(&stopped), "Disabled (timed)");
+        assert_eq!(
+            format_status_label_localized(&stopped, Locale::En),
+            "Disabled (timed)"
+        );
 
         stopped.has_breaks = false;
-        assert_eq!(format_status_label(&stopped), "No breaks configured");
+        assert_eq!(
+            format_status_label_localized(&stopped, Locale::En),
+            "No breaks configured"
+        );
     }
 
     #[test]
-    fn unavailable_tray_handle_is_noop() -> Result<(), Box<dyn std::error::Error>> {
-        let mut tray = TrayHandle::unavailable();
-        assert!(!tray.is_available());
-        tray.update(&sample_snapshot(SchedulerState::Waiting, true))?;
-        Ok(())
+    fn vietnamese_status_update_and_tooltip_format_all_states() {
+        let waiting = sample_snapshot(SchedulerState::Waiting, true);
+        assert_eq!(
+            format_tooltip_localized(&waiting, Locale::Vi),
+            "Safe Your Eyes — Nghỉ ngắn sau 14:50"
+        );
+        let mut waiting_long = waiting;
+        waiting_long.next_break_type = Some(BreakType::Long);
+        assert_eq!(
+            format_status_label_localized(&waiting_long, Locale::Vi),
+            "Nghỉ dài sau 14:50"
+        );
+
+        let mut pre = sample_snapshot(SchedulerState::PreBreak, true);
+        pre.seconds_until_next_break = 10;
+        assert_eq!(
+            format_status_label_localized(&pre, Locale::Vi),
+            "Sắp nghỉ sau 00:10"
+        );
+
+        let resting = sample_snapshot(SchedulerState::Resting, true);
+        assert_eq!(
+            format_status_label_localized(&resting, Locale::Vi),
+            "Tạm dừng (đang nghỉ)"
+        );
+
+        let mut stopped = sample_snapshot(SchedulerState::Stopped, false);
+        assert_eq!(
+            format_status_label_localized(&stopped, Locale::Vi),
+            "Tắt đến khi khởi động lại"
+        );
+        stopped.disabled_until_unix_secs = Some(1_800_000_000);
+        assert_eq!(
+            format_status_label_localized(&stopped, Locale::Vi),
+            "Đang tạm tắt (có hẹn giờ)"
+        );
+        stopped.has_breaks = false;
+        assert_eq!(
+            format_status_label_localized(&stopped, Locale::Vi),
+            "Chưa cấu hình lịch nghỉ"
+        );
+
+        #[cfg(not(feature = "msstore"))]
+        {
+            assert_eq!(
+                format_update_menu_label_localized("0.5.0", false, Locale::Vi),
+                "Có bản cập nhật (v0.5.0)"
+            );
+            assert_eq!(
+                format_update_menu_label_localized("v0.5.0", true, Locale::Vi),
+                "Đang cập nhật lên v0.5.0..."
+            );
+        }
     }
 
     #[test]
     fn try_new_degrades_cleanly_in_headless_env() {
         let (tx, _rx) = mpsc::channel();
         let snap = sample_snapshot(SchedulerState::Waiting, true);
-        let res = TrayHandle::try_new(&snap, tx);
+        let res = TrayHandle::try_new_with_locale(&snap, Locale::En, tx);
         assert!(matches!(res, Ok(_) | Err(PlatformError::Unavailable(_))));
     }
 
@@ -1136,18 +1381,24 @@ mod tests {
 
         let next_sec = advance_snapshot_countdown(&waiting, 1);
         assert_eq!(next_sec.seconds_until_next_break, 889);
-        assert_eq!(format_status_label(&next_sec), "Next short break in 14:49");
+        assert_eq!(
+            format_status_label_localized(&next_sec, Locale::En),
+            "Next short break in 14:49"
+        );
         assert!(should_apply_snapshot(&mut last, &next_sec));
         assert!(!should_apply_snapshot(&mut last, &next_sec));
 
         let saturated = advance_snapshot_countdown(&waiting, 5_000);
         assert_eq!(saturated.seconds_until_next_break, 0);
-        assert_eq!(format_status_label(&saturated), "Next short break in 00:00");
+        assert_eq!(
+            format_status_label_localized(&saturated, Locale::En),
+            "Next short break in 00:00"
+        );
 
         let mut pre = sample_snapshot(SchedulerState::PreBreak, true);
         pre.seconds_until_next_break = 5;
         assert_eq!(
-            format_status_label(&advance_snapshot_countdown(&pre, 2)),
+            format_status_label_localized(&advance_snapshot_countdown(&pre, 2), Locale::En),
             "Break starting in 00:03"
         );
 

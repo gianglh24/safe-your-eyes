@@ -1,17 +1,21 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nsh_base::button;
 use nsh_core::desktop::{
-    MainWindowOptions, WindowAttributes, WindowFrameStyle, WindowKind, WindowLevel, WindowPosition,
-    Workspaces,
+    MainWindowOptions, QuitMode, WindowAttributes, WindowFrameStyle, WindowKind, WindowLevel,
+    WindowPosition, Workspaces,
 };
-use nsh_core::element::desktop::{current_window, displays, quit};
+use nsh_core::element::desktop::{current_window, displays, quit, set_quit_mode};
 use nsh_core::prelude::*;
 use sye_core::config::BreakType;
+use sye_core::localize_exercise_name;
 use sye_core::scheduler::{OverlayOutcome, OverlayRequest};
 
 use crate::UiError;
+use crate::i18n::{format_overlay_unlock_hint, ui_text};
 use crate::theme::{colors, radii};
 use crate::ui::app_icon;
 
@@ -236,9 +240,7 @@ struct OverlayLaunch {
 
 static OVERLAY_LAUNCH: Mutex<Option<OverlayLaunch>> = Mutex::new(None);
 
-fn overlay_main_window_options_for_primary(
-    primary: Option<crate::MonitorRect>,
-) -> MainWindowOptions {
+fn base_overlay_window_attributes(interactive: bool) -> WindowAttributes {
     let mut attrs = WindowAttributes::default();
     attrs.frame = Some(WindowFrameStyle::None);
     attrs.level = Some(WindowLevel::AboveDock);
@@ -248,13 +250,20 @@ fn overlay_main_window_options_for_primary(
     attrs.minimizable = Some(false);
     attrs.maximizable = Some(false);
     attrs.closable = Some(false);
-    attrs.focusable = Some(true);
-    attrs.activate = Some(true);
+    attrs.focusable = Some(interactive);
+    attrs.activate = Some(interactive);
+    attrs.close_on_escape = Some(false);
+    attrs.close_on_blur = Some(false);
     attrs.close_on_press = Some(false);
-    attrs.taskbar = Some(cfg!(target_os = "windows"));
+    attrs.taskbar = Some(interactive && cfg!(target_os = "windows"));
     attrs.shadow = Some(false);
     attrs.transparent = Some(true);
+    attrs
+}
 
+fn overlay_main_window_options_for_primary(
+    primary: Option<crate::MonitorRect>,
+) -> MainWindowOptions {
     let mut main_window = MainWindowOptions::default();
     if let Some(rect) = primary {
         main_window.default_size = Some(size(px(rect.width), px(rect.height)));
@@ -266,7 +275,7 @@ fn overlay_main_window_options_for_primary(
     {
         main_window.default_mode = Some(nsh_core::desktop::WindowMode::FullScreen);
     }
-    main_window.attributes = attrs;
+    main_window.attributes = base_overlay_window_attributes(true);
     main_window
 }
 
@@ -293,24 +302,7 @@ fn overlay_main_window_options() -> MainWindowOptions {
 }
 
 fn secondary_window_attributes() -> WindowAttributes {
-    let mut attrs = WindowAttributes::default();
-    attrs.frame = Some(WindowFrameStyle::None);
-    attrs.level = Some(WindowLevel::AboveDock);
-    attrs.workspaces = Some(Workspaces::All);
-    attrs.resizable = Some(false);
-    attrs.movable = Some(false);
-    attrs.minimizable = Some(false);
-    attrs.maximizable = Some(false);
-    attrs.closable = Some(false);
-    attrs.close_on_escape = Some(false);
-    attrs.close_on_blur = Some(false);
-    attrs.close_on_press = Some(false);
-    attrs.taskbar = Some(false);
-    attrs.shadow = Some(false);
-    attrs.activate = Some(false);
-    attrs.transparent = Some(true);
-    attrs.focusable = Some(false);
-    attrs
+    base_overlay_window_attributes(false)
 }
 
 const PROGRESS_TRACK_W: f32 = 280.0;
@@ -323,17 +315,19 @@ struct Entrance {
     remaining_scale: AnimatedValue,
 }
 
+fn remaining_scale_for(vm: &OverlayViewModel, reduced: bool) -> f32 {
+    if reduced {
+        vm.remaining_ratio_discrete()
+    } else {
+        vm.remaining_ratio()
+    }
+}
+
 impl Entrance {
     fn new(vm: Signal<OverlayViewModel>) -> Self {
         let reduced = reduce_motion();
-        let (alpha, remaining_scale) = vm.with(|m| {
-            let scale = if reduced {
-                m.remaining_ratio_discrete()
-            } else {
-                m.remaining_ratio()
-            };
-            (m.fade_in_alpha(), scale)
-        });
+        let (alpha, remaining_scale) =
+            vm.with(|m| (m.fade_in_alpha(), remaining_scale_for(m, reduced)));
         let entrance = Self {
             fade: animated_value(alpha),
             card_scale: animated_value(if reduced { 1.0 } else { 0.98 }),
@@ -353,15 +347,10 @@ impl Entrance {
     fn play(&self, vm: Signal<OverlayViewModel>) {
         let reduced = reduce_motion();
         let (alpha, fade_ms, remaining_scale, remaining) = vm.with(|m| {
-            let scale = if reduced {
-                m.remaining_ratio_discrete()
-            } else {
-                m.remaining_ratio()
-            };
             (
                 m.fade_in_alpha(),
                 m.request.fade_in_ms,
-                scale,
+                remaining_scale_for(m, reduced),
                 m.remaining(),
             )
         });
@@ -386,16 +375,48 @@ impl Entrance {
     }
 }
 
+fn overlay_action_button(
+    label: &'static str,
+    disabled: impl Fn() -> bool + 'static,
+    on_press: impl Fn() + 'static,
+) -> impl IntoElement {
+    button()
+        .on_press(on_press)
+        .disabled(disabled)
+        .h(px(40.0))
+        .px_5()
+        .items_center()
+        .justify_center()
+        .rounded(radii::PILL)
+        .bg(colors::OVERLAY_TRACK)
+        .border_1()
+        .border_color(colors::OVERLAY_BORDER_EMPHASIZED)
+        .transition()
+        .duration(crate::theme::motion::CONTROL_MS)
+        .ease_out()
+        .hover(|s| s.opacity(0.9))
+        .active(|s| s.opacity(0.8))
+        .disabled_style(|s| s.opacity(0.4))
+        .child(
+            text(label)
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(colors::OVERLAY_TEXT),
+        )
+}
+
 fn build_overlay_card(
     vm: Signal<OverlayViewModel>,
     entrance: &Entrance,
     finish_if_ready: impl Fn() + Clone + 'static,
 ) -> impl IntoElement {
+    let locale = vm.with(|m| m.request().locale);
+    let copy = ui_text(locale);
     let break_label: &'static str = vm.with(|m| match m.request().break_type {
-        BreakType::Short => "SHORT BREAK",
-        BreakType::Long => "LONG BREAK",
+        BreakType::Short => copy.overlay_short_badge,
+        BreakType::Long => copy.overlay_long_badge,
     });
-    let exercise_title = vm.with(|m| m.request().title.clone());
+    let exercise_title = vm.with(|m| localize_exercise_name(&m.request().title, locale).to_owned());
     let status_note = vm.with(|m| m.status_note().map(str::to_owned));
     let show_skip = vm.with(OverlayViewModel::show_skip_button);
     let show_postpone = vm.with(OverlayViewModel::show_postpone_button);
@@ -405,68 +426,28 @@ fn build_overlay_card(
 
     let mut actions_row = view().flex_row().items_center().justify_center().gap_3();
     if show_postpone {
-        actions_row = actions_row.child(
-            button()
-                .on_press(move || {
-                    vm.update(|m| {
-                        let _ = m.trigger_postpone();
-                    });
-                    finish_postpone();
-                })
-                .disabled(move || vm.with(|m| !m.can_postpone()))
-                .h(px(40.0))
-                .px_5()
-                .items_center()
-                .justify_center()
-                .rounded(radii::PILL)
-                .bg(colors::OVERLAY_TRACK)
-                .border_1()
-                .border_color(colors::OVERLAY_BORDER_EMPHASIZED)
-                .transition()
-                .duration(crate::theme::motion::CONTROL_MS)
-                .ease_out()
-                .hover(|s| s.opacity(0.9))
-                .active(|s| s.opacity(0.8))
-                .disabled_style(|s| s.opacity(0.4))
-                .child(
-                    text("Postpone (Space)")
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(colors::OVERLAY_TEXT),
-                ),
-        );
+        actions_row = actions_row.child(overlay_action_button(
+            copy.overlay_postpone_button,
+            move || vm.with(|m| !m.can_postpone()),
+            move || {
+                vm.update(|m| {
+                    let _ = m.trigger_postpone();
+                });
+                finish_postpone();
+            },
+        ));
     }
     if show_skip {
-        actions_row = actions_row.child(
-            button()
-                .on_press(move || {
-                    vm.update(|m| {
-                        let _ = m.trigger_skip();
-                    });
-                    finish_skip();
-                })
-                .disabled(move || vm.with(|m| !m.can_skip()))
-                .h(px(40.0))
-                .px_5()
-                .items_center()
-                .justify_center()
-                .rounded(radii::PILL)
-                .bg(colors::OVERLAY_TRACK)
-                .border_1()
-                .border_color(colors::OVERLAY_BORDER_EMPHASIZED)
-                .transition()
-                .duration(crate::theme::motion::CONTROL_MS)
-                .ease_out()
-                .hover(|s| s.opacity(0.9))
-                .active(|s| s.opacity(0.8))
-                .disabled_style(|s| s.opacity(0.4))
-                .child(
-                    text("Skip (Esc)")
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(colors::OVERLAY_TEXT),
-                ),
-        );
+        actions_row = actions_row.child(overlay_action_button(
+            copy.overlay_skip_button,
+            move || vm.with(|m| !m.can_skip()),
+            move || {
+                vm.update(|m| {
+                    let _ = m.trigger_skip();
+                });
+                finish_skip();
+            },
+        ));
     }
 
     let mut card = view()
@@ -520,7 +501,7 @@ fn build_overlay_card(
                         .overflow_hidden()
                         .accessible(true)
                         .role(AccessibilityRole::Progressbar)
-                        .label("Break time remaining")
+                        .label(copy.overlay_progress_a11y)
                         .accessibility_value(move || {
                             vm.with(|m| {
                                 Some(nsh_core::AccessibilityValue {
@@ -559,11 +540,11 @@ fn build_overlay_card(
         text(move || {
             vm.with(|m| {
                 if m.is_shortcut_locked() {
-                    format!("Controls unlock in {}s", m.lock_remaining_secs())
+                    format_overlay_unlock_hint(m.lock_remaining_secs(), locale)
                 } else if m.request().strict_break && !m.request().allow_postpone {
-                    "Strict break active — rest your eyes".to_owned()
+                    copy.overlay_strict_hint.to_owned()
                 } else {
-                    "Relax your gaze until the timer completes".to_owned()
+                    copy.overlay_relax_hint.to_owned()
                 }
             })
         })
@@ -571,6 +552,25 @@ fn build_overlay_card(
         .text_color(colors::OVERLAY_MUTED),
     )
     .child(actions_row)
+}
+
+fn primary_display(list: &[nsh_core::desktop::Display]) -> Option<&nsh_core::desktop::Display> {
+    list.iter().find(|d| d.primary).or_else(|| list.first())
+}
+
+fn overlay_canvas(
+    vm: Signal<OverlayViewModel>,
+    entrance: Entrance,
+    finish_if_ready: impl Fn() + Clone + 'static,
+) -> impl IntoElement {
+    view()
+        .flex_1()
+        .bg(colors::OVERLAY_CANVAS)
+        .items_center()
+        .justify_center()
+        .p_6()
+        .bind_opacity(&entrance.fade)
+        .child(build_overlay_card(vm, &entrance, finish_if_ready))
 }
 
 pub(crate) fn build_overlay_view(
@@ -611,8 +611,12 @@ pub(crate) fn build_overlay_view(
         finish_tick();
     });
 
+    let key_opts = KeyOptions {
+        scope: KeyScope::App,
+        ..Default::default()
+    };
     let finish_esc = finish_if_ready.clone();
-    on_key("escape", move |_| {
+    on_key_with("escape", key_opts, move |_| {
         vm.update(|m| {
             let _ = m.handle_key(OverlayKey::Escape);
         });
@@ -620,33 +624,65 @@ pub(crate) fn build_overlay_view(
     });
 
     let finish_space = finish_if_ready.clone();
-    on_key("space", move |_| {
+    on_key_with("space", key_opts, move |_| {
         vm.update(|m| {
             let _ = m.handle_key(OverlayKey::Space);
         });
         finish_space();
     });
 
-    let entrance = Entrance::new(vm);
-    let mut root = view()
-        .flex_1()
-        .bg(colors::OVERLAY_CANVAS)
-        .items_center()
-        .justify_center()
-        .p_6()
-        .bind_opacity(&entrance.fade)
-        .child(build_overlay_card(vm, &entrance, finish_if_ready.clone()));
+    if !quit_on_finish {
+        let entrance = Entrance::new(vm);
+        if let Ok(mut guard) = started_at.lock() {
+            *guard = Some(nsh_core::time::now());
+        }
+        shown.set(true);
+        entrance.play(vm);
+        return overlay_canvas(vm, entrance, finish_if_ready).into_element();
+    }
 
-    if quit_on_finish {
+    set_quit_mode(QuitMode::LastWindowClosed);
+
+    let primary_opts = overlay_main_window_options();
+    let initial_displays = displays();
+    let initial_primary = primary_display(&initial_displays);
+    let overlay_title = ui_text(vm.with(|m| m.request().locale)).overlay_window_title;
+    let mut primary_win_el = nsh_core::element::desktop::window()
+        .id("overlay-primary")
+        .kind(WindowKind::Normal)
+        .title(overlay_title)
+        .attributes(primary_opts.attributes)
+        .on_open_change(|e| {
+            if !e.open {
+                quit();
+            }
+        });
+    if let Some(primary) = initial_primary {
+        primary_win_el = primary_win_el
+            .display(primary.id)
+            .default_position(WindowPosition::At(primary.bounds.origin))
+            .default_size(primary.bounds.size);
+    } else {
+        if let Some(sz) = primary_opts.default_size {
+            primary_win_el = primary_win_el.default_size(sz);
+        }
+        if let Some(pos) = primary_opts.default_position {
+            primary_win_el = primary_win_el.default_position(pos);
+        }
+    }
+    if let Some(mode) = primary_opts.default_mode {
+        primary_win_el = primary_win_el.default_mode(mode);
+    }
+
+    let on_shown_slot = Rc::new(RefCell::new(on_shown));
+    let finish_primary = finish_if_ready.clone();
+    let primary_win = primary_win_el.content(move || {
+        let entrance = Entrance::new(vm);
         let main_win = current_window();
         let effect_win = main_win.clone();
         effect(move || {
             let disp_list = displays();
-            if let Some(primary) = disp_list
-                .iter()
-                .find(|d| d.primary)
-                .or_else(|| disp_list.first())
-            {
+            if let Some(primary) = primary_display(&disp_list) {
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
                 apply_window_bounds(&effect_win, primary.bounds);
                 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -659,15 +695,12 @@ pub(crate) fn build_overlay_view(
         main_win.focus();
         let focus_win = main_win;
         let show_started = Arc::clone(&started_at);
+        let on_shown_cb = on_shown_slot.borrow_mut().take();
         drop(set_timeout(Duration::from_millis(50), move || {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             {
                 let disp_list = displays();
-                if let Some(primary) = disp_list
-                    .iter()
-                    .find(|d| d.primary)
-                    .or_else(|| disp_list.first())
-                {
+                if let Some(primary) = primary_display(&disp_list) {
                     apply_window_bounds(&focus_win, primary.bounds);
                 }
             }
@@ -677,25 +710,29 @@ pub(crate) fn build_overlay_view(
             }
             shown.set(true);
             entrance.play(vm);
-            if let Some(hook) = on_shown {
+            if let Some(hook) = on_shown_cb {
                 hook();
             }
         }));
+        overlay_canvas(vm, entrance, finish_primary.clone())
+    });
 
-        let secondary_displays = computed(|| {
-            let disp_list = displays();
-            if disp_list.len() <= 1 {
-                return Vec::new();
-            }
-            let primary_idx = disp_list.iter().position(|d| d.primary).unwrap_or(0);
-            disp_list
-                .into_iter()
-                .enumerate()
-                .filter_map(|(idx, d)| (idx != primary_idx).then_some(d))
-                .collect::<Vec<_>>()
-        });
+    let secondary_displays = computed(|| {
+        let disp_list = displays();
+        if disp_list.len() <= 1 {
+            return Vec::new();
+        }
+        let primary_idx = disp_list.iter().position(|d| d.primary).unwrap_or(0);
+        disp_list
+            .into_iter()
+            .enumerate()
+            .filter_map(|(idx, d)| (idx != primary_idx).then_some(d))
+            .collect::<Vec<_>>()
+    });
 
-        root = root.child(each(
+    view()
+        .child(primary_win)
+        .child(each(
             secondary_displays,
             |d| d.id.0,
             move |d, _| {
@@ -736,26 +773,11 @@ pub(crate) fn build_overlay_view(
                             ready.set(true);
                         }));
                     }
-                    view()
-                        .flex_1()
-                        .bg(colors::OVERLAY_CANVAS)
-                        .items_center()
-                        .justify_center()
-                        .p_6()
-                        .bind_opacity(&entrance.fade)
-                        .child(build_overlay_card(vm, &entrance, finish_if_ready.clone()))
+                    overlay_canvas(vm, entrance, finish_if_ready.clone())
                 })
             },
-        ));
-    } else {
-        if let Ok(mut guard) = started_at.lock() {
-            *guard = Some(nsh_core::time::now());
-        }
-        shown.set(true);
-        entrance.play(vm);
-    }
-
-    root
+        ))
+        .into_element()
 }
 
 #[component]
@@ -780,16 +802,13 @@ fn BreakOverlayRoot() -> impl IntoElement {
     }
 }
 
-pub fn run_overlay(request: OverlayRequest) -> Result<OverlayOutcome, UiError> {
-    run_overlay_with_hook(request, None, None)
-}
-
 pub fn run_overlay_with_hook(
     request: OverlayRequest,
     on_shown: Option<OverlayShownCallback>,
     on_outcome: Option<OverlayOutcomeCallback>,
 ) -> Result<OverlayOutcome, UiError> {
     let outcome_sink = Arc::new(Mutex::new(None));
+    let overlay_title = ui_text(request.locale).overlay_window_title.to_owned();
     let Ok(mut guard) = OVERLAY_LAUNCH.lock() else {
         return Err(UiError::WindowInit(
             "overlay launch state lock poisoned".to_owned(),
@@ -818,7 +837,7 @@ pub fn run_overlay_with_hook(
         let _ = platform::run_app(
             platform::AppSource::Rust(root),
             platform::AppOptions {
-                title: "Safe Your Eyes — Break".to_owned(),
+                title: overlay_title,
                 #[cfg(any(target_os = "linux", target_os = "windows"))]
                 app_id: "io.github.tunglt1810.safeyoureyes.overlay".to_owned(),
                 size: initial_size,
@@ -855,6 +874,7 @@ mod tests {
             shortcut_disable_secs: 2,
             fade_in_ms: 1500,
             status_note: Some("  Take a deep breath  ".to_owned()),
+            locale: sye_core::Locale::En,
         }
     }
 
@@ -1114,6 +1134,8 @@ mod tests {
         assert_eq!(opts.attributes.closable, Some(false));
         assert_eq!(opts.attributes.focusable, Some(true));
         assert_eq!(opts.attributes.activate, Some(true));
+        assert_eq!(opts.attributes.close_on_escape, Some(false));
+        assert_eq!(opts.attributes.close_on_blur, Some(false));
         assert_eq!(opts.attributes.close_on_press, Some(false));
         assert_eq!(opts.attributes.taskbar, Some(cfg!(target_os = "windows")));
         assert_eq!(opts.attributes.shadow, Some(false));
@@ -1159,5 +1181,216 @@ mod tests {
         assert_eq!(sec.activate, Some(false));
         assert_eq!(sec.focusable, Some(false));
         assert_eq!(sec.transparent, Some(true));
+    }
+
+    static OVERLAY_ROOT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn nsh_headless_overlay_root_opens_visible_primary_window()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use nsh_engine::{EngineConfig, Root};
+        use nsh_testing::Headless;
+
+        let _serial = OVERLAY_ROOT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let mut req = sample_request();
+        req.shortcut_disable_secs = 0;
+        req.fade_in_ms = 0;
+        let outcome_sink = Arc::new(Mutex::new(None));
+        let recorded: Arc<Mutex<Vec<OverlayOutcome>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorded_cb = Arc::clone(&recorded);
+        let on_outcome: OverlayOutcomeCallback = Arc::new(move |outcome| {
+            if let Ok(mut guard) = recorded_cb.lock() {
+                guard.push(outcome);
+            }
+        });
+
+        {
+            let mut guard = OVERLAY_LAUNCH.lock().map_err(|e| e.to_string())?;
+            *guard = Some(OverlayLaunch {
+                request: req,
+                outcome_sink: Arc::clone(&outcome_sink),
+                on_shown: None,
+                on_outcome: Some(on_outcome),
+            });
+        }
+
+        let mut app = Headless::start(EngineConfig {
+            environment: nsh_core::platform::Environment {
+                os: nsh_core::platform::Os::MacOs,
+                ..nsh_core::platform::Environment::default()
+            },
+            ..EngineConfig::new(Root::of::<BreakOverlayRoot>().appearance(Appearance::Dark))
+        })
+        .map_err(|e| e.to_string())?;
+
+        app.wait_for("SHORT BREAK")?;
+        let ids = app.window_ids()?;
+        assert!(
+            ids.contains(&"overlay-primary".to_owned()),
+            "BreakOverlayRoot must open an explicit primary desktop window, got {ids:?}"
+        );
+        let state = app
+            .window_state("overlay-primary")?
+            .ok_or("expected overlay-primary window state")?;
+        assert!(state.visible, "Primary overlay window must be visible");
+
+        app.press("Skip (Esc)")?;
+        app.settle();
+        assert_eq!(
+            *recorded.lock().map_err(|e| e.to_string())?,
+            vec![OverlayOutcome::Skipped]
+        );
+        assert!(
+            app.quit(),
+            "Skipping break must quit the overlay subprocess"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nsh_engine_overlay_root_opens_window_for_every_display()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::mpsc;
+
+        use nsh_core::desktop::{DesktopCommand, Display, DisplayId, WindowRequest};
+        use nsh_core::{ApproxTextEngine, Command, MountBatch, MountItem};
+        use nsh_engine::{Engine, EngineConfig, MountSink, Root};
+
+        let _serial = OVERLAY_ROOT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        struct ChannelSink(mpsc::Sender<MountBatch>);
+        impl MountSink for ChannelSink {
+            fn submit(&self, batch: MountBatch) {
+                let _ = self.0.send(batch);
+            }
+        }
+
+        let primary_bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)));
+        let secondary_bounds =
+            Bounds::new(point(px(1920.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        let displays = vec![
+            Display::new(DisplayId(1), primary_bounds, primary_bounds, true),
+            Display::new(DisplayId(2), secondary_bounds, secondary_bounds, false),
+        ];
+
+        {
+            let mut guard = OVERLAY_LAUNCH.lock().map_err(|e| e.to_string())?;
+            *guard = Some(OverlayLaunch {
+                request: sample_request(),
+                outcome_sink: Arc::new(Mutex::new(None)),
+                on_shown: None,
+                on_outcome: None,
+            });
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let engine = Engine::start_with(
+            EngineConfig {
+                environment: nsh_core::platform::Environment {
+                    os: nsh_core::platform::Os::MacOs,
+                    ..nsh_core::platform::Environment::default()
+                },
+                ..EngineConfig::new(Root::of::<BreakOverlayRoot>().appearance(Appearance::Dark))
+            },
+            || ApproxTextEngine,
+            ChannelSink(tx),
+            move |control| {
+                control.set_displays(displays);
+            },
+        )?;
+
+        let mut opened: Vec<(String, Option<DisplayId>, Option<Size<Points>>)> = Vec::new();
+        let mut primary_focused = false;
+        let mut primary_node = None;
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while std::time::Instant::now() < deadline && (opened.len() < 2 || !primary_focused) {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let Ok(batch) = rx.recv_timeout(remaining.min(Duration::from_millis(100))) else {
+                continue;
+            };
+            for item in batch.items {
+                if let MountItem::Command {
+                    id,
+                    command: Command::Desktop(cmd),
+                } = item
+                {
+                    match *cmd {
+                        DesktopCommand::OpenWindow(open) => {
+                            if open.options.id == "overlay-primary" {
+                                primary_node = Some(id);
+                            }
+                            opened.push((
+                                open.options.id,
+                                open.options.display,
+                                open.options.default_size,
+                            ));
+                        }
+                        DesktopCommand::Request(WindowRequest::Focus)
+                            if Some(id) == primary_node =>
+                        {
+                            primary_focused = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        drop(engine);
+
+        assert!(
+            opened.contains(&(
+                "overlay-primary".to_owned(),
+                Some(DisplayId(1)),
+                Some(primary_bounds.size),
+            )),
+            "Expected primary display overlay window, got {opened:?}"
+        );
+        assert!(
+            opened.contains(&(
+                "overlay-secondary-2".to_owned(),
+                Some(DisplayId(2)),
+                Some(secondary_bounds.size),
+            )),
+            "Expected secondary display overlay window, got {opened:?}"
+        );
+        assert!(
+            primary_focused,
+            "Primary overlay window must request focus on launch"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nsh_headless_overlay_renders_vietnamese_locale_and_default_exercise()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use nsh_engine::{EngineConfig, Points, Root, Size};
+        use nsh_testing::Headless;
+
+        #[component]
+        fn ViOverlayHost() -> impl IntoElement {
+            let mut req = sample_request();
+            req.locale = sye_core::Locale::Vi;
+            req.shortcut_disable_secs = 0;
+            req.status_note = Some("Đã bỏ qua hoặc hoãn 1/2 lần nghỉ liên tiếp".to_owned());
+            build_overlay_view(req, Arc::new(Mutex::new(None)), false, None, None)
+        }
+
+        let mut app = Headless::start(EngineConfig {
+            viewport: Size::new(Points(1024.0), Points(640.0)),
+            ..EngineConfig::new(Root::of::<ViOverlayHost>())
+        })
+        .map_err(|e| e.to_string())?;
+
+        app.wait_for("NGHỈ NGẮN")?;
+        app.wait_for("Nhìn tập trung vào một điểm ở xa")?;
+        app.wait_for("Đã bỏ qua hoặc hoãn 1/2 lần nghỉ liên tiếp")?;
+        app.wait_for("Hoãn (Space)")?;
+        app.wait_for("Bỏ qua (Esc)")?;
+        Ok(())
     }
 }

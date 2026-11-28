@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::chime::ChimeKind;
 use crate::config::{BreakType, Config, SkipLimitConfig};
+use crate::i18n::Locale;
 use crate::policies::{
     DndContext, DoNotDisturbPolicy, SkipLimitPolicy, SmartPauseDecision, SmartPausePolicy,
 };
@@ -39,6 +40,8 @@ pub struct OverlayRequest {
     pub shortcut_disable_secs: u64,
     pub fade_in_ms: u64,
     pub status_note: Option<String>,
+    #[serde(default)]
+    pub locale: Locale,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,25 +61,24 @@ pub struct StatusSnapshot {
     pub next_break_name: Option<String>,
     pub seconds_until_next_break: u64,
     pub consecutive_skips: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_version: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TraySnapshot {
     pub state: SchedulerState,
     pub enabled: bool,
     pub has_breaks: bool,
     pub menu_locked: bool,
     pub next_break_type: Option<BreakType>,
-    pub next_break_name: Option<String>,
     pub seconds_until_next_break: u64,
     pub disabled_until_unix_secs: Option<u64>,
-    pub consecutive_skips: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchedulerEvent {
     Start,
-    Tick,
     Enable,
     Disable { duration_secs: Option<u64> },
     EnterResting,
@@ -89,7 +91,6 @@ pub enum SchedulerEvent {
     DeferBreak { delay_secs: u64 },
     CancelCurrentBreak,
     ReloadConfig(Config),
-    RestartCountdown,
     Quit,
 }
 
@@ -98,6 +99,7 @@ pub enum SchedulerAction {
     NotifyPreBreak {
         break_spec: ResolvedBreak,
         warning_secs: u64,
+        total_secs: u64,
     },
     DismissNotification,
     PlayChime {
@@ -113,6 +115,7 @@ pub enum SchedulerAction {
 #[derive(Debug)]
 pub struct Scheduler<C: Clock> {
     config: Config,
+    system_locale: Locale,
     clock: C,
     rng_seed: u64,
     queue: Option<BreakQueue>,
@@ -121,6 +124,7 @@ pub struct Scheduler<C: Clock> {
     skip_limit: SkipLimitPolicy,
     pre_break_notification_active: bool,
     last_pre_break_notified_secs: Option<u64>,
+    pre_break_total_secs: u64,
 
     pre_break_at_ms: u64,
     next_break_at_ms: u64,
@@ -143,6 +147,7 @@ impl<C: Clock> Scheduler<C> {
         let queue = BreakQueue::from_config(&config, rng_seed);
         Self {
             config,
+            system_locale: Locale::En,
             clock,
             rng_seed,
             queue,
@@ -151,6 +156,7 @@ impl<C: Clock> Scheduler<C> {
             skip_limit: SkipLimitPolicy::new(0),
             pre_break_notification_active: false,
             last_pre_break_notified_secs: None,
+            pre_break_total_secs: 0,
             pre_break_at_ms: 0,
             next_break_at_ms: 0,
             countdown_started_ms: 0,
@@ -164,6 +170,15 @@ impl<C: Clock> Scheduler<C> {
             resting_since_wall_secs: 0,
             remaining_until_break_ms: 0,
         }
+    }
+
+    pub const fn set_system_locale(&mut self, locale: Locale) {
+        self.system_locale = locale;
+    }
+
+    #[must_use]
+    pub const fn active_locale(&self) -> Locale {
+        self.config.language.resolve(self.system_locale)
     }
 
     pub fn restore_session(&mut self, session: &SessionState) {
@@ -222,20 +237,27 @@ impl<C: Clock> Scheduler<C> {
         if self.state != SchedulerState::PreBreak {
             return Vec::new();
         }
+        self.apply_pre_break_policies(current_idle, dnd_ctx)
+            .unwrap_or_default()
+    }
+
+    fn apply_pre_break_policies(
+        &mut self,
+        current_idle: Option<Duration>,
+        dnd_ctx: Option<&DndContext>,
+    ) -> Option<Vec<SchedulerAction>> {
         if let Some(ctx) = dnd_ctx
             && DoNotDisturbPolicy::evaluate(&self.config.do_not_disturb, ctx).should_suppress()
         {
-            return self.handle_event(SchedulerEvent::CancelCurrentBreak);
+            return Some(self.handle_cancel_current_break());
         }
         if let Some(idle) = current_idle
             && let Some(delay) =
                 SmartPausePolicy::should_postpone_if_active(&self.config.smart_pause, idle)
         {
-            return self.handle_event(SchedulerEvent::DeferBreak {
-                delay_secs: delay.as_secs().max(1),
-            });
+            return Some(self.handle_defer_break(delay.as_secs().max(1)));
         }
-        Vec::new()
+        None
     }
 
     #[must_use]
@@ -257,10 +279,6 @@ impl<C: Clock> Scheduler<C> {
         current_idle: Option<Duration>,
         dnd_ctx: Option<&DndContext>,
     ) -> Vec<SchedulerAction> {
-        if self.state == SchedulerState::Quit {
-            return Vec::new();
-        }
-
         let now = self.now_mono_ms();
         match self.state {
             SchedulerState::Waiting => self.tick_waiting(now, current_idle, dnd_ctx),
@@ -269,7 +287,7 @@ impl<C: Clock> Scheduler<C> {
                 if now < self.break_ends_ms {
                     return Vec::new();
                 }
-                self.complete_break(true)
+                self.complete_break()
             }
             SchedulerState::Stopped => {
                 if let Some(resume_at) = self.resume_at_ms
@@ -300,7 +318,6 @@ impl<C: Clock> Scheduler<C> {
 
         match event {
             SchedulerEvent::Start | SchedulerEvent::Enable => self.handle_start_or_enable(),
-            SchedulerEvent::Tick => self.tick_with_policies(None, None),
             SchedulerEvent::Disable { duration_secs } => self.handle_disable(duration_secs),
             SchedulerEvent::EnterResting => self.handle_enter_resting(0),
             SchedulerEvent::ExitResting { credit_idle_secs } => {
@@ -314,13 +331,6 @@ impl<C: Clock> Scheduler<C> {
             SchedulerEvent::DeferBreak { delay_secs } => self.handle_defer_break(delay_secs),
             SchedulerEvent::CancelCurrentBreak => self.handle_cancel_current_break(),
             SchedulerEvent::ReloadConfig(new_cfg) => self.handle_reload_config(new_cfg),
-            SchedulerEvent::RestartCountdown => {
-                if self.state == SchedulerState::Waiting {
-                    self.enter_waiting_fresh()
-                } else {
-                    Vec::new()
-                }
-            }
             SchedulerEvent::Quit => self.handle_quit(),
         }
     }
@@ -341,24 +351,22 @@ impl<C: Clock> Scheduler<C> {
             next_break_name,
             seconds_until_next_break: self.seconds_until_next_break(),
             consecutive_skips: self.skip_limit.count(),
+            daemon_version: None,
         }
     }
 
     #[must_use]
     pub fn tray_snapshot(&self) -> TraySnapshot {
-        let status = self.status_snapshot();
         let menu_locked = self.config.strict_break
             && matches!(self.state, SchedulerState::PreBreak | SchedulerState::Break);
         TraySnapshot {
-            state: status.state,
-            enabled: status.enabled,
+            state: self.state,
+            enabled: self.is_enabled(),
             has_breaks: self.queue.is_some(),
             menu_locked,
-            next_break_type: status.next_break_type,
-            next_break_name: status.next_break_name,
-            seconds_until_next_break: status.seconds_until_next_break,
+            next_break_type: self.queue.as_ref().map(|q| q.current().spec.break_type),
+            seconds_until_next_break: self.seconds_until_next_break(),
             disabled_until_unix_secs: self.disabled_until_unix_secs,
-            consecutive_skips: status.consecutive_skips,
         }
     }
 
@@ -411,22 +419,17 @@ impl<C: Clock> Scheduler<C> {
         if now < self.pre_break_at_ms {
             return Vec::new();
         }
-        if self.queue.is_none() {
-            self.state = SchedulerState::Stopped;
-            return vec![SchedulerAction::UpdateTray(self.tray_snapshot())];
-        }
-        if let Some(ctx) = dnd_ctx
-            && DoNotDisturbPolicy::evaluate(&self.config.do_not_disturb, ctx).should_suppress()
-        {
-            if let Some(queue) = self.queue.as_mut() {
-                queue.advance();
-            }
-            return self.enter_waiting_fresh();
-        }
-        let Some(queued) = self.queue.as_ref().map(|q| q.current().clone()) else {
+        let Some(queue) = self.queue.as_mut() else {
             self.state = SchedulerState::Stopped;
             return vec![SchedulerAction::UpdateTray(self.tray_snapshot())];
         };
+        if let Some(ctx) = dnd_ctx
+            && DoNotDisturbPolicy::evaluate(&self.config.do_not_disturb, ctx).should_suppress()
+        {
+            queue.advance();
+            return self.enter_waiting_fresh();
+        }
+        let queued = queue.current().clone();
         let effective_warning_secs = self.config.pre_break_warning_secs.min(queued.wait_secs);
         if effective_warning_secs == 0 {
             if let Some(idle) = current_idle
@@ -445,12 +448,14 @@ impl<C: Clock> Scheduler<C> {
         self.state = SchedulerState::PreBreak;
         self.pre_break_notification_active = true;
         self.last_pre_break_notified_secs = Some(effective_warning_secs);
+        self.pre_break_total_secs = effective_warning_secs;
         let warning_ms = effective_warning_secs.saturating_mul(1000);
         // Ensure the user still receives a warning window if tick() arrived late.
         self.next_break_at_ms = self.next_break_at_ms.max(now.saturating_add(warning_ms));
         let mut actions = vec![SchedulerAction::NotifyPreBreak {
             break_spec: queued.spec,
             warning_secs: effective_warning_secs,
+            total_secs: effective_warning_secs,
         }];
         if self.config.audible_alert.pre_break {
             actions.push(SchedulerAction::PlayChime {
@@ -481,21 +486,14 @@ impl<C: Clock> Scheduler<C> {
                     return vec![SchedulerAction::NotifyPreBreak {
                         break_spec: spec,
                         warning_secs: remaining_secs,
+                        total_secs: self.pre_break_total_secs,
                     }];
                 }
             }
             return Vec::new();
         }
-        if let Some(ctx) = dnd_ctx
-            && DoNotDisturbPolicy::evaluate(&self.config.do_not_disturb, ctx).should_suppress()
-        {
-            return self.handle_cancel_current_break();
-        }
-        if let Some(idle) = current_idle
-            && let Some(delay) =
-                SmartPausePolicy::should_postpone_if_active(&self.config.smart_pause, idle)
-        {
-            return self.handle_defer_break(delay.as_secs().max(1));
+        if let Some(actions) = self.apply_pre_break_policies(current_idle, dnd_ctx) {
+            return actions;
         }
         let dismiss_notification = std::mem::take(&mut self.pre_break_notification_active);
         self.last_pre_break_notified_secs = None;
@@ -659,7 +657,7 @@ impl<C: Clock> Scheduler<C> {
         let limit_hit = self.skip_limit.controls_disabled(&skip_limit_cfg);
 
         match outcome {
-            OverlayOutcome::Completed => self.complete_break(true),
+            OverlayOutcome::Completed => self.complete_break(),
             OverlayOutcome::Skipped => {
                 if self.config.strict_break || self.is_shortcut_locked() || limit_hit {
                     return Vec::new();
@@ -678,7 +676,7 @@ impl<C: Clock> Scheduler<C> {
                     duration_secs
                 };
                 let mut actions = vec![SchedulerAction::CloseOverlay];
-                actions.extend(self.enter_waiting_with_wait_secs(delay, true));
+                actions.extend(self.enter_waiting_with_wait_secs(delay));
                 actions
             }
             OverlayOutcome::Closed => self.advance_after_skip_or_close(false),
@@ -691,11 +689,8 @@ impl<C: Clock> Scheduler<C> {
         }
         let delay_ms = delay_secs.max(1).saturating_mul(1000);
         self.next_break_at_ms = self.now_mono_ms().saturating_add(delay_ms);
-        self.last_pre_break_notified_secs = None;
         let mut actions = Vec::new();
-        if std::mem::take(&mut self.pre_break_notification_active) {
-            actions.push(SchedulerAction::DismissNotification);
-        }
+        self.dismiss_pre_break_notification(&mut actions);
         actions.push(SchedulerAction::UpdateTray(self.tray_snapshot()));
         actions
     }
@@ -707,21 +702,22 @@ impl<C: Clock> Scheduler<C> {
         if let Some(queue) = self.queue.as_mut() {
             queue.advance();
         }
-        self.last_pre_break_notified_secs = None;
         let mut actions = Vec::new();
-        if std::mem::take(&mut self.pre_break_notification_active) {
-            actions.push(SchedulerAction::DismissNotification);
-        }
+        self.dismiss_pre_break_notification(&mut actions);
         actions.extend(self.enter_waiting_fresh());
         actions
     }
 
     fn handle_reload_config(&mut self, new_cfg: Config) -> Vec<SchedulerAction> {
         let mut current_non_schedule = self.config.clone();
+        current_non_schedule.autostart = new_cfg.autostart;
         current_non_schedule.theme = new_cfg.theme;
+        current_non_schedule.language = new_cfg.language;
         current_non_schedule.check_for_updates = new_cfg.check_for_updates;
         if new_cfg == current_non_schedule {
+            self.config.autostart = new_cfg.autostart;
             self.config.theme = new_cfg.theme;
+            self.config.language = new_cfg.language;
             self.config.check_for_updates = new_cfg.check_for_updates;
             return Vec::new();
         }
@@ -761,14 +757,16 @@ impl<C: Clock> Scheduler<C> {
         actions
     }
 
+    fn dismiss_pre_break_notification(&mut self, actions: &mut Vec<SchedulerAction>) {
+        self.last_pre_break_notified_secs = None;
+        if std::mem::take(&mut self.pre_break_notification_active) {
+            actions.push(SchedulerAction::DismissNotification);
+        }
+    }
+
     fn push_active_state_cleanup(&mut self, actions: &mut Vec<SchedulerAction>) {
         match self.state {
-            SchedulerState::PreBreak => {
-                self.last_pre_break_notified_secs = None;
-                if std::mem::take(&mut self.pre_break_notification_active) {
-                    actions.push(SchedulerAction::DismissNotification);
-                }
-            }
+            SchedulerState::PreBreak => self.dismiss_pre_break_notification(actions),
             SchedulerState::Break => actions.push(SchedulerAction::CloseOverlay),
             SchedulerState::Start
             | SchedulerState::Waiting
@@ -819,6 +817,7 @@ impl<C: Clock> Scheduler<C> {
 
         let skip_limit_cfg = self.effective_skip_limit();
         let limit_hit = self.skip_limit.controls_disabled(&skip_limit_cfg);
+        let locale = self.active_locale();
         let request = OverlayRequest {
             break_type: spec.break_type,
             title: spec.name,
@@ -828,7 +827,10 @@ impl<C: Clock> Scheduler<C> {
             postpone_duration_secs: self.config.postpone_duration_secs,
             shortcut_disable_secs: self.config.shortcut_disable_secs,
             fade_in_ms: self.config.fade_in_ms,
-            status_note: self.skip_limit.status_label(&skip_limit_cfg),
+            status_note: self
+                .skip_limit
+                .status_label_localized(&skip_limit_cfg, locale),
+            locale,
         };
         vec![
             SchedulerAction::ShowOverlay(request),
@@ -836,15 +838,12 @@ impl<C: Clock> Scheduler<C> {
         ]
     }
 
-    fn complete_break(&mut self, emit_close: bool) -> Vec<SchedulerAction> {
+    fn complete_break(&mut self) -> Vec<SchedulerAction> {
         self.skip_limit.record_completed_break();
         if let Some(queue) = self.queue.as_mut() {
             queue.advance();
         }
-        let mut actions = Vec::new();
-        if emit_close {
-            actions.push(SchedulerAction::CloseOverlay);
-        }
+        let mut actions = vec![SchedulerAction::CloseOverlay];
         if self.config.audible_alert.post_break {
             actions.push(SchedulerAction::PlayChime {
                 kind: ChimeKind::PostBreak,
@@ -874,14 +873,10 @@ impl<C: Clock> Scheduler<C> {
             self.last_pre_break_notified_secs = None;
             return vec![SchedulerAction::UpdateTray(self.tray_snapshot())];
         };
-        self.enter_waiting_with_wait_secs(wait_secs, true)
+        self.enter_waiting_with_wait_secs(wait_secs)
     }
 
-    fn enter_waiting_with_wait_secs(
-        &mut self,
-        wait_secs: u64,
-        persist: bool,
-    ) -> Vec<SchedulerAction> {
+    fn enter_waiting_with_wait_secs(&mut self, wait_secs: u64) -> Vec<SchedulerAction> {
         let now = self.now_mono_ms();
         let wait_ms = wait_secs.saturating_mul(1000);
         let warning_secs = self.config.pre_break_warning_secs.min(wait_secs);
@@ -895,7 +890,7 @@ impl<C: Clock> Scheduler<C> {
         self.countdown_started_ms = now;
 
         let mut actions = vec![SchedulerAction::UpdateTray(self.tray_snapshot())];
-        if persist && self.config.persist_state {
+        if self.config.persist_state {
             actions.push(SchedulerAction::PersistSession(self.session_state()));
         }
         actions
@@ -1363,6 +1358,7 @@ mod tests {
             skip_break_windows: vec!["vlc".to_owned()],
             take_break_windows: Vec::new(),
             while_on_battery: false,
+            while_gaming: true,
         };
         let mut sched = Scheduler::new(cfg, &clock, 1);
         let _ = sched.handle_event(SchedulerEvent::Start);
@@ -1390,8 +1386,7 @@ mod tests {
         let dnd = DndContext {
             is_fullscreen: true,
             active_window_class: Some("VLC".to_owned()),
-            on_battery: false,
-            system_inhibited: false,
+            ..DndContext::default()
         };
         let cancel_actions = sched.evaluate_pre_break_policies(None, Some(&dnd));
         assert_eq!(sched.state(), SchedulerState::Waiting);
@@ -1449,26 +1444,6 @@ mod tests {
         clock.advance_secs(30);
         let _ = sched.handle_event(SchedulerEvent::IdleObserved(Duration::ZERO));
         assert_eq!(sched.status_snapshot().seconds_until_next_break, 900);
-    }
-
-    #[test]
-    fn restart_countdown_restarts_only_while_waiting() {
-        let clock = FakeClock::default();
-        let mut sched = Scheduler::new(test_config(), &clock, 1);
-        let _ = sched.handle_event(SchedulerEvent::Start);
-
-        clock.advance_secs(180);
-        assert_eq!(sched.status_snapshot().seconds_until_next_break, 720);
-        let _ = sched.handle_event(SchedulerEvent::RestartCountdown);
-        assert_eq!(sched.status_snapshot().seconds_until_next_break, 900);
-
-        let _ = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
-        assert!(
-            sched
-                .handle_event(SchedulerEvent::RestartCountdown)
-                .is_empty()
-        );
-        assert_eq!(sched.state(), SchedulerState::Break);
     }
 
     #[test]
@@ -1607,6 +1582,34 @@ mod tests {
             !actions
                 .iter()
                 .any(|a| matches!(a, SchedulerAction::DismissNotification))
+        );
+    }
+
+    #[test]
+    fn tick_with_policies_gaming_suppresses_break_even_when_fullscreen_dnd_disabled() {
+        let clock = FakeClock::default();
+        let mut cfg = test_config();
+        cfg.do_not_disturb.enabled = false;
+        cfg.do_not_disturb.while_gaming = true;
+        let mut sched = Scheduler::new(cfg, &clock, 1);
+        let _ = sched.handle_event(SchedulerEvent::Start);
+
+        clock.advance_secs(890);
+        let gaming_ctx = DndContext {
+            game_detected: true,
+            ..DndContext::default()
+        };
+        let actions = sched.tick_with_policies(None, Some(&gaming_ctx));
+        assert_eq!(sched.state(), SchedulerState::Waiting);
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::ShowOverlay(_)))
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::NotifyPreBreak { .. }))
         );
     }
 
@@ -1754,6 +1757,55 @@ mod tests {
     }
 
     #[test]
+    fn reload_config_language_only_preserves_countdown_and_updates_locale() {
+        let clock = FakeClock::default();
+        let cfg = test_config();
+        let mut sched = Scheduler::new(cfg.clone(), &clock, 1);
+        sched.set_system_locale(Locale::En);
+        let _ = sched.handle_event(SchedulerEvent::Start);
+        clock.advance_secs(120);
+        assert_eq!(sched.status_snapshot().seconds_until_next_break, 780);
+        assert_eq!(sched.active_locale(), Locale::En);
+
+        let mut lang_only = cfg;
+        lang_only.language = crate::i18n::LanguageMode::Vi;
+        let actions = sched.handle_event(SchedulerEvent::ReloadConfig(lang_only));
+        assert!(actions.is_empty());
+        assert_eq!(sched.config().language, crate::i18n::LanguageMode::Vi);
+        assert_eq!(sched.active_locale(), Locale::Vi);
+        assert_eq!(sched.status_snapshot().seconds_until_next_break, 780);
+    }
+
+    #[test]
+    fn overlay_request_uses_active_locale_for_skip_note() {
+        let clock = FakeClock::default();
+        let cfg = Config {
+            language: crate::i18n::LanguageMode::Vi,
+            limit_consecutive_skips: SkipLimitConfig {
+                enabled: true,
+                max_skips: 2,
+            },
+            ..test_config()
+        };
+        let mut sched = Scheduler::new(cfg, &clock, 1);
+        let _ = sched.handle_event(SchedulerEvent::Start);
+        let _ = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
+        clock.advance_secs(3);
+        let _ = sched.handle_event(SchedulerEvent::OverlayFinished(OverlayOutcome::Skipped));
+
+        let actions = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
+        let req = actions.into_iter().find_map(|a| match a {
+            SchedulerAction::ShowOverlay(r) => Some(r),
+            _ => None,
+        });
+        assert_eq!(req.as_ref().map(|r| r.locale), Some(Locale::Vi));
+        assert_eq!(
+            req.as_ref().and_then(|r| r.status_note.as_deref()),
+            Some("Đã bỏ qua hoặc hoãn 1/2 lần nghỉ liên tiếp")
+        );
+    }
+
+    #[test]
     fn strict_break_overrides_skip_limit_for_postpone_and_status_note() {
         let clock = FakeClock::default();
         let cfg = Config {
@@ -1817,7 +1869,7 @@ mod tests {
             assert_eq!(actions.len(), 1);
             assert!(matches!(
                 actions.first(),
-                Some(SchedulerAction::NotifyPreBreak { warning_secs, .. }) if *warning_secs == expected
+                Some(SchedulerAction::NotifyPreBreak { warning_secs, total_secs: 10, .. }) if *warning_secs == expected
             ));
             notified_secs.push(expected);
         }
@@ -2012,5 +2064,33 @@ mod tests {
                 .iter()
                 .any(|a| matches!(a, SchedulerAction::CloseOverlay))
         );
+    }
+
+    #[test]
+    fn reload_config_autostart_only_preserves_countdown_and_active_break() {
+        let clock = FakeClock::default();
+        let cfg = test_config();
+        let mut sched = Scheduler::new(cfg.clone(), &clock, 1);
+        let _ = sched.handle_event(SchedulerEvent::Start);
+
+        clock.advance_secs(12);
+        let before = sched.status_snapshot().seconds_until_next_break;
+
+        let mut updated = cfg.clone();
+        updated.autostart = !cfg.autostart;
+        let actions = sched.handle_event(SchedulerEvent::ReloadConfig(updated.clone()));
+        assert!(actions.is_empty());
+        assert_eq!(sched.config().autostart, updated.autostart);
+        assert_eq!(sched.status_snapshot().seconds_until_next_break, before);
+
+        let _ = sched.handle_event(SchedulerEvent::TakeBreak { kind: None });
+        assert_eq!(sched.state(), SchedulerState::Break);
+
+        let mut toggled_back = updated;
+        toggled_back.autostart = cfg.autostart;
+        let break_actions = sched.handle_event(SchedulerEvent::ReloadConfig(toggled_back));
+        assert!(break_actions.is_empty());
+        assert_eq!(sched.state(), SchedulerState::Break);
+        assert_eq!(sched.config().autostart, cfg.autostart);
     }
 }

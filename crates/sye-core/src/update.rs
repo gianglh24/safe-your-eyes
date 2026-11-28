@@ -54,7 +54,7 @@ impl fmt::Display for SemVer {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateInfo {
     pub latest_version: String,
     pub download_url: String,
@@ -149,27 +149,20 @@ impl UpdateCacheState {
 
     pub fn save_to_path(&self, path: &Path) -> Result<(), UpdateCacheError> {
         let encoded = self.to_toml_string()?;
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent).map_err(|err| UpdateCacheError::Io {
-                message: err.to_string(),
-            })?;
-        }
-        fs::write(path, encoded).map_err(|err| UpdateCacheError::Io {
+        crate::write_string_atomic(path, &encoded).map_err(|err| UpdateCacheError::Io {
             message: err.to_string(),
         })
     }
 
     #[must_use]
     pub fn available_update(&self, current_version: &str) -> Option<UpdateInfo> {
-        let latest_raw = self.latest_version.as_deref()?;
-        if !is_newer_version(latest_raw, current_version) {
+        let latest = SemVer::parse_stable(self.latest_version.as_deref()?)?;
+        let current = SemVer::parse_stable(current_version)?;
+        if latest <= current {
             return None;
         }
-        let parsed = SemVer::parse_stable(latest_raw)?;
         Some(UpdateInfo {
-            latest_version: parsed.to_string(),
+            latest_version: latest.to_string(),
             download_url: PUBLIC_DOWNLOAD_URL.to_owned(),
         })
     }

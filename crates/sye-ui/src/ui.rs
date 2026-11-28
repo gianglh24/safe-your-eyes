@@ -5,14 +5,20 @@ use nsh_core::canvas::{LineCap, LineJoin};
 use nsh_core::element::{ImageSrc, Painter, Timing};
 use nsh_core::prelude::*;
 use sye_core::config::ThemeMode;
+use sye_core::{LanguageMode, Locale};
 
-use crate::theme::{SUPPORT_URL, colors, motion, radii, theme_mode_label};
+use crate::i18n::{language_mode_a11y_label, language_mode_label, theme_mode_label_localized};
+use crate::theme::{SUPPORT_URL, colors, motion, radii};
 
 include!(concat!(env!("OUT_DIR"), "/app_icon.rs"));
 
 const SIDEBAR_ITEM_HEIGHT: f32 = 38.0;
 const SIDEBAR_ITEM_GAP: f32 = 4.0;
 
+const GLOBE_ICON_SVG: &str = "\
+M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z \
+M2 12h20 \
+M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z";
 const SUN_ICON_SVG: &str = "\
 M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z \
 M12 2v2 M12 20v2 \
@@ -23,22 +29,32 @@ const MOON_ICON_SVG: &str = "M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z";
 const MONITOR_ICON_SVG: &str = "\
 M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z \
 M8 21h8 M12 17v4";
+#[cfg(not(feature = "msstore"))]
+const DOWNLOAD_ICON_SVG: &str = "\
+M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 \
+M7 10l5 5 5-5 M12 15V3";
+const CLOCK_ICON_SVG: &str = "\
+M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z \
+M12 6v6l4 2";
+const ALERT_ICON_SVG: &str = "\
+M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z \
+M12 8v4 M12 16h.01";
+const EYE_ICON_SVG: &str = "\
+M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z \
+M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z";
+const PAUSE_ICON_SVG: &str = "M9 5v14 M15 5v14";
+const DISABLED_ICON_SVG: &str = "\
+M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z \
+M4.93 4.93l14.14 14.14";
 
 const APP_ICON_RGBA_LEN: usize = (APP_ICON_SIZE as usize) * (APP_ICON_SIZE as usize) * 4;
 
 fn app_icon_rgba() -> Arc<[u8]> {
     static PIXELS: OnceLock<Arc<[u8]>> = OnceLock::new();
-    Arc::clone(PIXELS.get_or_init(|| {
-        let mut out = Vec::with_capacity(APP_ICON_RGBA_LEN);
-        for &[count, r, g, b, a] in APP_ICON_RLE.as_chunks::<5>().0 {
-            let rgba = [r, g, b, a];
-            for _ in 0..usize::from(count) {
-                out.extend_from_slice(&rgba);
-            }
-        }
-        out.resize(APP_ICON_RGBA_LEN, 0);
-        Arc::from(out)
-    }))
+    Arc::clone(
+        PIXELS
+            .get_or_init(|| Arc::from(sye_core::decode_rle_rgba(APP_ICON_RLE, APP_ICON_RGBA_LEN))),
+    )
 }
 
 pub(crate) fn app_icon(size_px: f32) -> impl IntoElement {
@@ -79,7 +95,6 @@ pub(crate) fn page_heading(
     title: impl IntoReactive<SharedString>,
     highlight_scale: &AnimatedValue,
 ) -> impl IntoElement {
-    let (bx1, by1, bx2, by2) = motion::COZY_STANDARD_BEZIER;
     view()
         .gap_1()
         .child(
@@ -94,9 +109,6 @@ pub(crate) fn page_heading(
                 .h(px(4.0))
                 .rounded(radii::PILL)
                 .bg(colors::HEADING_HIGHLIGHT)
-                .transition_colors()
-                .duration(motion::THEME_COLOR_MS)
-                .ease_bezier(bx1, by1, bx2, by2)
                 .origin_left()
                 .bind_transform(nsh_core::TransformKind::ScaleX, highlight_scale),
         )
@@ -125,60 +137,262 @@ pub(crate) fn stagger_item(
     container.bind_opacity(&opacity).bind_translate_y(&y)
 }
 
-pub(crate) fn theme_toggle_button(
-    mode: impl Fn() -> ThemeMode + Copy + 'static,
-    on_press: impl Fn() + 'static,
+fn stroke_icon(
+    size: f32,
+    line_width: f32,
+    stroke_color: impl Fn() -> AdaptiveColor + 'static,
+    svg: impl Fn() -> &'static str + 'static,
+) -> impl IntoElement {
+    let scale = size / 24.0_f32;
+    canvas(move || {
+        Painter::new()
+            .scale(scale, scale)
+            .stroke_color(color(stroke_color()))
+            .line_width(line_width)
+            .line_cap(LineCap::Round)
+            .line_join(LineJoin::Round)
+            .stroke_svg(svg())
+    })
+    .w(px(size))
+    .h(px(size))
+    .flex_shrink_0()
+}
+
+fn header_pill_button(
+    base: nsh_core::element::View,
+    icon: impl IntoElement,
+    label: impl IntoReactive<SharedString>,
 ) -> impl IntoElement {
     let (bx1, by1, bx2, by2) = motion::COZY_STANDARD_BEZIER;
+    base.role(AccessibilityRole::Button)
+        .focusable(true)
+        .window_drag(false)
+        .h(px(36.0))
+        .px_3()
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .rounded(radii::PILL)
+        .bg(colors::BACKGROUND_SURFACE)
+        .border_1()
+        .border_color(colors::BORDER_EMPHASIZED)
+        .transition()
+        .duration(motion::CONTROL_MS)
+        .ease_bezier(bx1, by1, bx2, by2)
+        .hover(|s| s.bg(colors::OVERLAY_HOVER))
+        .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.88))
+        .child(icon)
+        .child(
+            text(label)
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(colors::TEXT_PRIMARY),
+        )
+}
 
-    let icon = canvas(move || {
-        let svg = match mode() {
+fn measure_center_into(
+    btn_ref: nsh_core::element::ElementRef,
+    measured_center: Signal<Option<[f32; 2]>>,
+) {
+    spawn(async move {
+        if let Some(m) = btn_ref.measure().await {
+            let cx = m.page.x.0 + m.frame.size.width.0 * 0.5;
+            let cy = m.page.y.0 + m.frame.size.height.0 * 0.5;
+            measured_center.set(Some([cx, cy]));
+        }
+    });
+}
+
+pub(crate) fn language_toggle_button(
+    mode: impl Fn() -> LanguageMode + Copy + 'static,
+    locale: impl Fn() -> Locale + Copy + 'static,
+    on_press: impl Fn() + 'static,
+) -> impl IntoElement {
+    let icon = stroke_icon(15.0, 2.0, || colors::TEXT_PRIMARY, || GLOBE_ICON_SVG);
+    let base = view()
+        .accessible(true)
+        .label(move || language_mode_a11y_label(mode(), locale()))
+        .on_press(move |_: &PressEvent| on_press());
+    header_pill_button(base, icon, move || language_mode_label(mode(), locale()))
+}
+
+pub(crate) fn theme_toggle_button(
+    mode: impl Fn() -> ThemeMode + Copy + 'static,
+    locale: impl Fn() -> Locale + Copy + 'static,
+    measured_center: Signal<Option<[f32; 2]>>,
+    on_press: impl Fn(Option<[f32; 2]>) + 'static,
+) -> impl IntoElement {
+    let btn_ref = element_ref();
+
+    effect(move || {
+        let _ = nsh_core::element::desktop::title_bar();
+        let _ = nsh_core::element::desktop::window_state();
+        let _ = window();
+        measure_center_into(btn_ref, measured_center);
+    });
+
+    let icon = stroke_icon(
+        16.0,
+        2.0,
+        || colors::TEXT_PRIMARY,
+        move || match mode() {
             ThemeMode::Light => SUN_ICON_SVG,
             ThemeMode::Dark => MOON_ICON_SVG,
             ThemeMode::System => MONITOR_ICON_SVG,
-        };
-        let stroke = color(colors::TEXT_PRIMARY);
-        Painter::new()
-            .scale(16.0_f32 / 24.0_f32, 16.0_f32 / 24.0_f32)
-            .stroke_color(stroke)
-            .line_width(2.0_f32)
-            .line_cap(LineCap::Round)
-            .line_join(LineJoin::Round)
-            .stroke_svg(svg)
-    })
-    .w(px(16.0))
-    .h(px(16.0))
-    .flex_shrink_0();
+        },
+    );
 
-    view().window_drag(false).child(
-        button()
-            .on_press(on_press)
-            .h(px(36.0))
-            .px_3()
-            .flex_row()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .rounded(radii::PILL)
-            .bg(colors::BACKGROUND_SURFACE)
-            .border_1()
-            .border_color(colors::BORDER_EMPHASIZED)
-            .transition()
-            .duration(motion::THEME_COLOR_MS)
-            .ease_bezier(bx1, by1, bx2, by2)
-            .hover(|s| s.bg(colors::OVERLAY_HOVER))
-            .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.88))
-            .child(icon)
-            .child(
-                text(move || theme_mode_label(mode()))
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(colors::TEXT_PRIMARY),
-            ),
-    )
+    let base = view()
+        .element_ref(&btn_ref)
+        .on_layout(move |_: &Bounds<Points>| {
+            measure_center_into(btn_ref, measured_center);
+        })
+        .on_press(move |ev: &PressEvent| {
+            let p = ev.page_position;
+            let live_press = (p.x.0 > 0.0 || p.y.0 > 0.0).then_some([p.x.0, p.y.0]);
+            let origin = live_press.or_else(|| measured_center.get_untracked());
+            on_press(origin);
+        });
+    header_pill_button(base, icon, move || {
+        theme_mode_label_localized(mode(), locale())
+    })
 }
 
-pub(crate) fn section_header(title: &'static str, caption: &'static str) -> impl IntoElement {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CountdownTone {
+    Active,
+    Warning,
+    Break,
+    Paused,
+    Disabled,
+}
+
+#[derive(Clone, Copy)]
+struct CountdownToneStyle {
+    bg: AdaptiveColor,
+    border: AdaptiveColor,
+    icon: AdaptiveColor,
+    text: AdaptiveColor,
+    chip_bg: AdaptiveColor,
+    svg: &'static str,
+}
+
+impl CountdownTone {
+    const fn style(self) -> CountdownToneStyle {
+        use crate::theme::badge;
+        match self {
+            Self::Active => CountdownToneStyle {
+                bg: badge::GREEN_BG,
+                border: badge::GREEN_BORDER,
+                icon: badge::GREEN_ICON,
+                text: badge::GREEN_TEXT,
+                chip_bg: badge::GREEN_CHIP_BG,
+                svg: CLOCK_ICON_SVG,
+            },
+            Self::Warning => CountdownToneStyle {
+                bg: badge::YELLOW_BG,
+                border: badge::YELLOW_BORDER,
+                icon: badge::YELLOW_ICON,
+                text: badge::YELLOW_TEXT,
+                chip_bg: badge::YELLOW_CHIP_BG,
+                svg: ALERT_ICON_SVG,
+            },
+            Self::Break => CountdownToneStyle {
+                bg: badge::ORANGE_BG,
+                border: badge::ORANGE_BORDER,
+                icon: badge::ORANGE_ICON,
+                text: badge::ORANGE_TEXT,
+                chip_bg: badge::ORANGE_BG,
+                svg: EYE_ICON_SVG,
+            },
+            Self::Paused => CountdownToneStyle {
+                bg: badge::BLUE_BG,
+                border: badge::BLUE_BORDER,
+                icon: badge::BLUE_ICON,
+                text: badge::BLUE_TEXT,
+                chip_bg: badge::BLUE_BG,
+                svg: PAUSE_ICON_SVG,
+            },
+            Self::Disabled => CountdownToneStyle {
+                bg: badge::GRAY_BG,
+                border: badge::GRAY_BORDER,
+                icon: badge::GRAY_ICON,
+                text: badge::GRAY_TEXT,
+                chip_bg: badge::GRAY_BG,
+                svg: DISABLED_ICON_SVG,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CountdownPillState {
+    pub(crate) tone: CountdownTone,
+    pub(crate) label: String,
+    pub(crate) time: Option<String>,
+    pub(crate) accessible_label: String,
+}
+
+pub(crate) fn countdown_status_pill(
+    tone: impl Fn() -> CountdownTone + Copy + 'static,
+    label: impl IntoReactive<SharedString>,
+    time: impl Fn() -> Option<String> + Copy + 'static,
+    accessible_label: impl IntoReactive<SharedString>,
+) -> impl IntoElement {
+    let icon = stroke_icon(
+        14.0,
+        2.0,
+        move || tone().style().icon,
+        move || tone().style().svg,
+    );
+
+    view()
+        .accessible(true)
+        .role(AccessibilityRole::Timer)
+        .label(accessible_label)
+        .h(px(36.0))
+        .px_3()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .rounded(radii::PILL)
+        .bg(move || tone().style().bg)
+        .border_1()
+        .border_color(move || tone().style().border)
+        .transition_colors()
+        .duration(motion::CONTROL_MS)
+        .ease_out()
+        .child(icon)
+        .child(
+            text(label)
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(move || tone().style().text),
+        )
+        .child(when(
+            move || time().is_some(),
+            move || {
+                view()
+                    .px_2()
+                    .py(px(2.0))
+                    .rounded(radii::PILL)
+                    .bg(move || tone().style().chip_bg)
+                    .child(
+                        text(move || time().unwrap_or_default())
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(move || tone().style().text)
+                            .tabular_nums(),
+                    )
+            },
+        ))
+}
+
+pub(crate) fn section_header(
+    title: impl IntoReactive<SharedString>,
+    caption: impl IntoReactive<SharedString>,
+) -> impl IntoElement {
     view()
         .gap_1()
         .child(
@@ -191,13 +405,7 @@ pub(crate) fn section_header(title: &'static str, caption: &'static str) -> impl
 }
 
 pub(crate) fn section_divider() -> impl IntoElement {
-    let (bx1, by1, bx2, by2) = motion::COZY_STANDARD_BEZIER;
-    view()
-        .h(px(1.0))
-        .bg(colors::BORDER)
-        .transition_colors()
-        .duration(motion::THEME_COLOR_MS)
-        .ease_bezier(bx1, by1, bx2, by2)
+    view().h(px(1.0)).bg(colors::BORDER)
 }
 
 pub(crate) fn primary_button_with_disabled(
@@ -298,19 +506,15 @@ pub(crate) fn destructive_button(
 
 pub(crate) fn pastel_kpi_card(
     tone: KpiTone,
-    label: &'static str,
+    label: impl IntoReactive<SharedString>,
     value: impl IntoReactive<SharedString>,
 ) -> impl IntoElement {
-    let (bx1, by1, bx2, by2) = motion::COZY_STANDARD_BEZIER;
     view()
         .flex_1()
         .rounded(radii::KPI)
         .bg(tone.bg())
         .border_1()
         .border_color(colors::BORDER)
-        .transition_colors()
-        .duration(motion::THEME_COLOR_MS)
-        .ease_bezier(bx1, by1, bx2, by2)
         .px_4()
         .py_3()
         .gap_1()
@@ -342,7 +546,7 @@ pub(crate) fn pastel_kpi_card(
 }
 
 pub(crate) fn cozy_switch(
-    label: &'static str,
+    label: impl Fn() -> &'static str + Copy + 'static,
     checked: impl Fn() -> bool + 'static,
     on_change: impl Fn(bool) + 'static,
 ) -> impl IntoElement {
@@ -350,7 +554,7 @@ pub(crate) fn cozy_switch(
 }
 
 pub(crate) fn cozy_switch_with_disabled(
-    label: &'static str,
+    label: impl Fn() -> &'static str + Copy + 'static,
     checked: impl Fn() -> bool + 'static,
     disabled: impl Fn() -> bool + Copy + 'static,
     on_change: impl Fn(bool) + 'static,
@@ -377,7 +581,7 @@ pub(crate) fn cozy_switch_with_disabled(
                         on_change(*val);
                     }
                 })
-                .accessibility_label(label)
+                .accessibility_label(move || Some(SharedString::from(label())))
                 .track_style(|s| {
                     s.w(px(42.0))
                         .h(px(24.0))
@@ -407,7 +611,7 @@ pub(crate) fn cozy_switch_with_disabled(
 }
 
 pub(crate) fn cozy_input(
-    placeholder: &'static str,
+    placeholder: impl IntoReactive<String>,
     value: impl Fn() -> String + 'static,
     on_change: impl Fn(&str) + 'static,
 ) -> impl IntoElement {
@@ -415,7 +619,7 @@ pub(crate) fn cozy_input(
 }
 
 pub(crate) fn cozy_input_with_disabled(
-    placeholder: &'static str,
+    placeholder: impl IntoReactive<String>,
     value: impl Fn() -> String + 'static,
     disabled: impl Fn() -> bool + Copy + 'static,
     on_change: impl Fn(&str) + 'static,
@@ -460,12 +664,12 @@ pub(crate) fn sidebar_nav_indicator(active_index: impl Fn() -> u8 + 'static) -> 
         .rounded(radii::NAV_ITEM)
         .bg(colors::SIDEBAR_ACTIVE)
         .translate_y(move || px(f32::from(active_index()) * step))
-        .transition()
+        .transition_transform()
         .ease_spring(motion::COZY_SPRING)
 }
 
 pub(crate) fn sidebar_nav_item(
-    label: &'static str,
+    label: impl IntoReactive<SharedString>,
     selected: impl Fn() -> bool + 'static,
     on_press: impl Fn() + 'static,
 ) -> impl IntoElement {
@@ -518,26 +722,8 @@ pub(crate) fn status_banner(
         )
 }
 
-pub(crate) fn support_link(label: &'static str) -> impl IntoElement {
-    link()
-        .href(SUPPORT_URL)
-        .h(px(36.0))
-        .px_4()
-        .items_center()
-        .justify_center()
-        .rounded(radii::PILL)
-        .bg(colors::ACCENT)
-        .transition()
-        .duration(motion::CONTROL_MS)
-        .ease_out()
-        .hover(|s| s.opacity(0.92))
-        .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.88))
-        .child(
-            text(label)
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(colors::ON_ACCENT),
-        )
+pub(crate) fn support_link(label: impl IntoReactive<SharedString>) -> impl IntoElement {
+    external_link_button(label, SUPPORT_URL, true)
 }
 
 pub(crate) fn external_link_button(
@@ -545,20 +731,20 @@ pub(crate) fn external_link_button(
     href: &'static str,
     primary: bool,
 ) -> impl IntoElement {
+    let base = link()
+        .href(href)
+        .h(px(36.0))
+        .px_4()
+        .items_center()
+        .justify_center()
+        .rounded(radii::PILL)
+        .transition()
+        .duration(motion::CONTROL_MS)
+        .ease_out()
+        .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.88));
     if primary {
-        link()
-            .href(href)
-            .h(px(36.0))
-            .px_4()
-            .items_center()
-            .justify_center()
-            .rounded(radii::PILL)
-            .bg(colors::ACCENT)
-            .transition()
-            .duration(motion::CONTROL_MS)
-            .ease_out()
+        base.bg(colors::ACCENT)
             .hover(|s| s.opacity(0.92))
-            .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.88))
             .child(
                 text(label)
                     .text_sm()
@@ -567,21 +753,10 @@ pub(crate) fn external_link_button(
             )
             .into_element()
     } else {
-        link()
-            .href(href)
-            .h(px(36.0))
-            .px_4()
-            .items_center()
-            .justify_center()
-            .rounded(radii::PILL)
-            .bg(colors::BACKGROUND_SURFACE)
+        base.bg(colors::BACKGROUND_SURFACE)
             .border_1()
             .border_color(colors::BORDER_EMPHASIZED)
-            .transition()
-            .duration(motion::CONTROL_MS)
-            .ease_out()
             .hover(|s| s.bg(colors::OVERLAY_HOVER))
-            .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.88))
             .child(
                 text(label)
                     .text_sm()
@@ -592,16 +767,21 @@ pub(crate) fn external_link_button(
     }
 }
 
+#[cfg(not(feature = "msstore"))]
 pub(crate) fn version_update_badge(
     label: impl IntoReactive<SharedString>,
     on_press: impl Fn() + 'static,
 ) -> impl IntoElement {
+    let icon = stroke_icon(12.0, 2.25, || colors::ON_ACCENT, || DOWNLOAD_ICON_SVG);
+
     button()
         .on_press(on_press)
         .h(px(22.0))
         .px_2()
+        .flex_row()
         .items_center()
         .justify_center()
+        .gap_1()
         .rounded(radii::PILL)
         .bg(colors::ACCENT)
         .transition()
@@ -609,6 +789,7 @@ pub(crate) fn version_update_badge(
         .ease_out()
         .hover(|s| s.opacity(0.92))
         .active(|s| s.scale(motion::PRESS_SCALE).opacity(0.88))
+        .child(icon)
         .child(
             text(label)
                 .text_xs()
@@ -633,7 +814,7 @@ pub(crate) fn build_support_qr_matrix() -> Option<&'static (usize, Box<[bool]>)>
         .as_ref()
 }
 
-pub(crate) fn support_qr_card() -> impl IntoElement {
+pub(crate) fn support_qr_card(caption: impl IntoReactive<SharedString>) -> impl IntoElement {
     let qr_bg = rgb(0xFFFEF7);
     let qr_fg = rgb(0x261101);
     let module_px = 3.5_f32;
@@ -667,7 +848,7 @@ pub(crate) fn support_qr_card() -> impl IntoElement {
                 .child(grid),
         )
         .child(
-            text("Scan to Buy Me a Coffee")
+            text(caption)
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(colors::TEXT_SECONDARY),
@@ -711,7 +892,7 @@ mod tests {
         fn SwitchHost() -> impl IntoElement {
             let checked = signal(false);
             view().p_4().child(cozy_switch(
-                "Smart Pause on idle",
+                || "Smart Pause on idle",
                 move || checked.get(),
                 move |next| checked.set(next),
             ))
@@ -795,19 +976,39 @@ mod tests {
     }
 
     #[test]
-    fn theme_toggle_button_cycles_mode_on_press() -> Result<(), String> {
+    fn theme_toggle_button_cycles_mode_and_reports_fresh_origin() -> Result<(), String> {
+        use std::sync::Mutex;
+
         use nsh_engine::{EngineConfig, Points, Root, Size};
         use nsh_testing::Headless;
+
+        static LAST_ORIGIN: Mutex<Option<[f32; 2]>> = Mutex::new(None);
 
         #[component]
         fn ToggleHost() -> impl IntoElement {
             let mode = signal(ThemeMode::System);
-            view().p_3().child(theme_toggle_button(
-                move || mode.get(),
-                move || mode.update(|m| *m = crate::theme::next_theme_mode(*m)),
-            ))
+            let measured = signal(None::<[f32; 2]>);
+            let shift = signal(0.0_f32);
+            view()
+                .p_3()
+                .child(view().h(move || px(shift.get())))
+                .child(secondary_button("Shift", move || shift.set(36.0)))
+                .child(theme_toggle_button(
+                    move || mode.get(),
+                    || Locale::En,
+                    measured,
+                    move |origin| {
+                        if let Ok(mut guard) = LAST_ORIGIN.lock() {
+                            *guard = origin;
+                        }
+                        mode.update(|m| *m = crate::theme::next_theme_mode(*m));
+                    },
+                ))
         }
 
+        if let Ok(mut guard) = LAST_ORIGIN.lock() {
+            *guard = None;
+        }
         let mut app = Headless::start(EngineConfig {
             viewport: Size::new(Points(400.0), Points(200.0)),
             ..EngineConfig::new(Root::of::<ToggleHost>())
@@ -817,8 +1018,24 @@ mod tests {
 
         app.press("Theme: System")?;
         app.wait_for("Theme: Light")?;
+        let before = LAST_ORIGIN
+            .lock()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "expected non-None origin on initial press".to_owned())?;
+
+        app.press("Shift")?;
+        app.settle();
         app.press("Theme: Light")?;
         app.wait_for("Theme: Dark")?;
+        let after = LAST_ORIGIN
+            .lock()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "expected non-None origin after shift".to_owned())?;
+        assert!(
+            after[1] - before[1] > 30.0,
+            "Expected fresh origin y to shift by ~36pt, before={before:?}, after={after:?}"
+        );
+
         app.press("Theme: Dark")?;
         app.wait_for("Theme: System")?;
         Ok(())

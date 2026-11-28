@@ -9,12 +9,17 @@ const MAX_EVENTS_PER_PUMP: usize = 64;
 pub struct PlatformEventLoop {
     #[cfg(target_os = "macos")]
     inner: Option<macos_impl::MacOsEventLoop>,
-    #[cfg(not(target_os = "macos"))]
-    _event_tx: Sender<TrayEvent>,
 }
 
 impl PlatformEventLoop {
     #[must_use]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(
+            clippy::needless_pass_by_value,
+            reason = "macOS event loop takes ownership of event_tx"
+        )
+    )]
     pub fn new(event_tx: Sender<TrayEvent>) -> Self {
         #[cfg(target_os = "macos")]
         {
@@ -24,9 +29,8 @@ impl PlatformEventLoop {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            Self {
-                _event_tx: event_tx,
-            }
+            let _ = event_tx;
+            Self {}
         }
     }
 
@@ -41,12 +45,7 @@ impl PlatformEventLoop {
         }
         #[cfg(target_os = "windows")]
         {
-            let start = std::time::Instant::now();
-            windows_impl::drain_messages();
-            let remaining = timeout.saturating_sub(start.elapsed());
-            if !remaining.is_zero() {
-                std::thread::sleep(remaining);
-            }
+            windows_impl::pump(timeout);
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
@@ -343,19 +342,25 @@ const fn classify_child_window(
 }
 
 #[cfg(target_os = "windows")]
+pub(crate) fn find_primary_window(target_pid: u32) -> *mut core::ffi::c_void {
+    windows_impl::find_child_window(target_pid)
+}
+
+#[cfg(target_os = "windows")]
 mod windows_impl {
     use std::mem::MaybeUninit;
     use std::ptr;
+    use std::time::{Duration, Instant};
 
-    use windows_sys::Win32::Foundation::{FALSE, HWND, LPARAM, TRUE};
+    use windows_sys::Win32::Foundation::{FALSE, HWND, LPARAM, TRUE, WAIT_FAILED, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, DispatchMessageW, EnumWindows,
         GW_OWNER, GWL_EXSTYLE, GetForegroundWindow, GetWindow, GetWindowLongW,
         GetWindowThreadProcessId, HWND_NOTOPMOST, HWND_TOPMOST, IsHungAppWindow, IsIconic,
-        IsWindowVisible, MSG, PM_REMOVE, PeekMessageW, SW_RESTORE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow, TranslateMessage,
-        WS_EX_TOOLWINDOW,
+        IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
+        PeekMessageW, QS_ALLINPUT, SW_RESTORE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+        SetForegroundWindow, SetWindowPos, ShowWindow, TranslateMessage, WS_EX_TOOLWINDOW,
     };
 
     use super::{ChildWindowMatch, MAX_EVENTS_PER_PUMP, classify_child_window};
@@ -399,7 +404,7 @@ mod windows_impl {
         }
     }
 
-    fn find_child_window(target_pid: u32) -> HWND {
+    pub(super) fn find_child_window(target_pid: u32) -> HWND {
         let mut state = FindWindowState {
             target_pid,
             primary: ptr::null_mut(),
@@ -420,7 +425,7 @@ mod windows_impl {
         }
     }
 
-    pub(super) fn drain_messages() {
+    fn drain_messages() {
         let mut msg = MaybeUninit::<MSG>::uninit();
         for _ in 0..MAX_EVENTS_PER_PUMP {
             // SAFETY: `msg.as_mut_ptr()` points to valid writable storage for a Win32 `MSG`.
@@ -438,6 +443,39 @@ mod windows_impl {
             unsafe {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+            }
+        }
+    }
+
+    pub(super) fn pump(timeout: Duration) {
+        let start = Instant::now();
+        loop {
+            drain_messages();
+            let remaining = timeout.saturating_sub(start.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            let wait_ms = u32::try_from(remaining.as_millis())
+                .unwrap_or(u32::MAX)
+                .max(1);
+            // `MWMO_INPUTAVAILABLE` wakes for messages that `drain_messages` left queued at its cap.
+            // SAFETY: waiting on zero kernel handles with `QS_ALLINPUT` blocks only on thread messages.
+            #[expect(unsafe_code, reason = "Win32 FFI")]
+            let status = unsafe {
+                MsgWaitForMultipleObjectsEx(
+                    0,
+                    ptr::null(),
+                    wait_ms,
+                    QS_ALLINPUT,
+                    MWMO_INPUTAVAILABLE,
+                )
+            };
+            if status != WAIT_OBJECT_0 {
+                // Keeps the daemon loop from spinning when the wait itself fails.
+                if status == WAIT_FAILED {
+                    std::thread::sleep(remaining);
+                }
+                break;
             }
         }
     }

@@ -149,6 +149,28 @@ fn should_bootout_launchd_job(launchctl_print_stdout: &str) -> bool {
 }
 
 #[cfg(any(target_os = "windows", test))]
+const WINDOWS_STARTUP_TASK_DISABLED: i32 = 0;
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_STARTUP_TASK_DISABLED_BY_USER: i32 = 1;
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_STARTUP_TASK_ENABLED: i32 = 2;
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_STARTUP_TASK_DISABLED_BY_POLICY: i32 = 3;
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_STARTUP_TASK_ENABLED_BY_POLICY: i32 = 4;
+
+#[cfg(any(target_os = "windows", test))]
+const fn interpret_windows_startup_task_state(state: i32) -> Option<bool> {
+    match state {
+        WINDOWS_STARTUP_TASK_ENABLED | WINDOWS_STARTUP_TASK_ENABLED_BY_POLICY => Some(true),
+        WINDOWS_STARTUP_TASK_DISABLED
+        | WINDOWS_STARTUP_TASK_DISABLED_BY_USER
+        | WINDOWS_STARTUP_TASK_DISABLED_BY_POLICY => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
 fn is_windows_startup_approved(bytes: Option<&[u8]>) -> bool {
     match bytes {
         Some([first, ..]) => (*first & 0x01) == 0,
@@ -171,15 +193,18 @@ fn strip_windows_verbatim_prefix(path: &Path) -> PathBuf {
 pub fn query_system_autostart(custom_config: Option<&Path>) -> Option<bool> {
     #[cfg(target_os = "macos")]
     if !has_custom_config_override(custom_config)
-        && let Ok(exe) = std::env::current_exe()
+        && let Ok(resolved) = crate::paths::resolve_current_exe()
     {
         if AutostartManager::system_default().is_ok_and(|m| m.is_enabled()) {
             return None;
         }
-        let resolved = exe.canonicalize().unwrap_or(exe);
         if is_macos_app_bundle_executable(&resolved) {
             return macos_login_item::query_status();
         }
+    }
+    #[cfg(target_os = "windows")]
+    if windows_startup_task::is_packaged_msix() {
+        return windows_startup_task::query_status();
     }
     #[cfg(target_os = "windows")]
     if !has_custom_config_override(custom_config) {
@@ -197,10 +222,19 @@ pub fn sync_system_autostart(
     enabled: bool,
     custom_config: Option<&Path>,
 ) -> Result<(), PlatformError> {
-    let mgr = AutostartManager::system_default()?;
-    let exe = std::env::current_exe().map_err(|err| PlatformError::Io(err.to_string()))?;
-    let resolved_exe = strip_windows_verbatim_prefix(&exe.canonicalize().unwrap_or(exe));
     let custom_cfg = has_custom_config_override(custom_config);
+
+    // StartupTask arguments are fixed in the MSIX manifest, and MSIX virtualizes HKCU writes, so a
+    // Run key could not carry `--config` either: a custom config starts at login with defaults.
+    #[cfg(target_os = "windows")]
+    if windows_startup_task::is_packaged_msix() {
+        return windows_startup_task::sync(enabled);
+    }
+
+    let mgr = AutostartManager::system_default()?;
+    let resolved =
+        crate::paths::resolve_current_exe().map_err(|err| PlatformError::Io(err.to_string()))?;
+    let resolved_exe = strip_windows_verbatim_prefix(&resolved);
 
     #[cfg(target_os = "macos")]
     if !custom_cfg && is_macos_app_bundle_executable(&resolved_exe) {
@@ -222,10 +256,100 @@ pub fn sync_system_autostart(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        if !enabled {
-            return mgr.disable();
+        mgr.sync(enabled, &entry)
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_startup_task {
+    use std::ptr;
+
+    use sye_core::PlatformError;
+    use windows::ApplicationModel::{StartupTask, StartupTaskState};
+    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
+    use windows::core::HSTRING;
+    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS};
+    use windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
+
+    use super::interpret_windows_startup_task_state;
+
+    const STARTUP_TASK_ID: &str = "SafeYourEyesStartup";
+
+    struct ComGuard {
+        should_uninit: bool,
+    }
+
+    impl ComGuard {
+        fn init() -> Self {
+            // SAFETY: Initializes COM on the current thread; if already initialized in STA,
+            // `RPC_E_CHANGED_MODE` is returned and `should_uninit` stays false.
+            #[expect(unsafe_code, reason = "Win32 COM initialization for WinRT StartupTask")]
+            let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            Self {
+                should_uninit: hr.is_ok(),
+            }
         }
-        mgr.enable(&entry)
+    }
+
+    impl Drop for ComGuard {
+        fn drop(&mut self) {
+            if self.should_uninit {
+                // SAFETY: Balanced with a successful `CoInitializeEx` on this thread.
+                #[expect(unsafe_code, reason = "Win32 COM uninitialization")]
+                unsafe {
+                    CoUninitialize();
+                }
+            }
+        }
+    }
+
+    pub(super) fn is_packaged_msix() -> bool {
+        let mut len: u32 = 0;
+        // SAFETY: Passing a zero length and null output buffer queries whether the process has
+        // MSIX package identity without writing to memory.
+        #[expect(unsafe_code, reason = "Win32 Appx package identity query")]
+        let status = unsafe { GetCurrentPackageFullName(&mut len, ptr::null_mut()) };
+        status == ERROR_INSUFFICIENT_BUFFER || status == ERROR_SUCCESS
+    }
+
+    pub(super) fn query_status() -> Option<bool> {
+        let _com = ComGuard::init();
+        let task_id = HSTRING::from(STARTUP_TASK_ID);
+        let task = StartupTask::GetAsync(&task_id).ok()?.join().ok()?;
+        let state = task.State().ok()?;
+        interpret_windows_startup_task_state(state.0)
+    }
+
+    pub(super) fn sync(enabled: bool) -> Result<(), PlatformError> {
+        let _com = ComGuard::init();
+        let task_id = HSTRING::from(STARTUP_TASK_ID);
+        let task = StartupTask::GetAsync(&task_id)
+            .and_then(|op| op.join())
+            .map_err(|err| PlatformError::Io(format!("StartupTask::GetAsync failed: {err}")))?;
+        if enabled {
+            let state = task
+                .RequestEnableAsync()
+                .and_then(|op| op.join())
+                .map_err(|err| {
+                    PlatformError::Io(format!("StartupTask::RequestEnableAsync failed: {err}"))
+                })?;
+            match state {
+                StartupTaskState::Enabled | StartupTaskState::EnabledByPolicy => Ok(()),
+                StartupTaskState::DisabledByUser => Err(PlatformError::Io(
+                    "autostart is disabled by user in Windows Startup Apps settings".to_owned(),
+                )),
+                StartupTaskState::DisabledByPolicy => Err(PlatformError::Io(
+                    "autostart is disabled by system policy".to_owned(),
+                )),
+                _ => Err(PlatformError::Io(format!(
+                    "StartupTask did not enable (state={})",
+                    state.0
+                ))),
+            }
+        } else {
+            task.Disable()
+                .map_err(|err| PlatformError::Io(format!("StartupTask::Disable failed: {err}")))
+        }
     }
 }
 
@@ -249,9 +373,7 @@ mod windows_run_key {
         r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
     const VALUE_NAME: &str = "Safe Your Eyes";
 
-    fn to_wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
+    use crate::console::encode_wide_nul as to_wide;
 
     fn delete_value_if_present(subkey: &str, value_name: &str) -> Result<(), PlatformError> {
         let subkey_w = to_wide(subkey);
@@ -992,5 +1114,30 @@ mod tests {
         assert!(is_windows_startup_approved(Some(&[0x06, 0, 0, 0])));
         assert!(!is_windows_startup_approved(Some(&[0x03, 0, 0, 0])));
         assert!(!is_windows_startup_approved(Some(&[0x07, 0, 0, 0])));
+    }
+
+    #[test]
+    fn windows_startup_task_state_maps_enabled_disabled_and_unknown_values() {
+        assert_eq!(
+            interpret_windows_startup_task_state(WINDOWS_STARTUP_TASK_ENABLED),
+            Some(true)
+        );
+        assert_eq!(
+            interpret_windows_startup_task_state(WINDOWS_STARTUP_TASK_ENABLED_BY_POLICY),
+            Some(true)
+        );
+        assert_eq!(
+            interpret_windows_startup_task_state(WINDOWS_STARTUP_TASK_DISABLED),
+            Some(false)
+        );
+        assert_eq!(
+            interpret_windows_startup_task_state(WINDOWS_STARTUP_TASK_DISABLED_BY_USER),
+            Some(false)
+        );
+        assert_eq!(
+            interpret_windows_startup_task_state(WINDOWS_STARTUP_TASK_DISABLED_BY_POLICY),
+            Some(false)
+        );
+        assert_eq!(interpret_windows_startup_task_state(99), None);
     }
 }

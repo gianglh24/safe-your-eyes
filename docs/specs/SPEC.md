@@ -65,6 +65,8 @@ Each concept uses one name across this specification and the source code.
 | Do Not Disturb | `DoNotDisturbPolicy` | Policy that blocks breaks on battery, fullscreen windows, or excluded window titles. |
 | Skip limit | `SkipLimitPolicy` | Policy that counts consecutive skips or postpones and locks both actions at `max_skips`. |
 | Theme mode | `ThemeMode` | Persisted Settings window theme: `System`, `Light`, or `Dark`. |
+| Language mode | `LanguageMode` | Persisted interface language preference: `System`, `En`, or `Vi`. |
+| Locale | `Locale` | Resolved active display language: `En` or `Vi`. |
 | Configuration | `Config` | TOML configuration structure with `schema_version` and validation. |
 | Session state | `SessionState` | Saved queue progress stored in `session.toml`. |
 | Chime kind | `ChimeKind` | Synthesized WAV chime type: `PreBreak` or `PostBreak`. |
@@ -145,16 +147,25 @@ Every event handler runs synchronously and returns a list of `SchedulerAction` v
 
 `Scheduler` evaluates `DoNotDisturbPolicy` before entering `PreBreak` and again before entering `Break`.
 When `DoNotDisturbPolicy` blocks a break, `Scheduler` skips the current break, dismisses any active pre-break notification, advances `BreakQueue`, and starts the next wait cycle.
+`do_not_disturb.while_gaming` defaults to `true` and remains active even when `do_not_disturb.enabled` is `false`.
 
 `DoNotDisturbPolicy` evaluates rules in fixed priority order:
 
-1. If `enabled` is `false`, return `Allow`.
-2. If `while_on_battery` is `true` and the battery is discharging, block with `OnBattery`.
-3. If the active window matches `skip_break_windows` (case-insensitive), block with `SkipWindow`.
-4. If the active window matches `take_break_windows`, return `Allow` even in fullscreen mode.
-5. If the active window is fullscreen, block with `Fullscreen`.
-6. If the operating system reports Do Not Disturb (`system_inhibited`), block with `SystemInhibited`.
-7. Otherwise, return `Allow`.
+1. If both `enabled` and `while_gaming` are `false`, return `Allow`.
+2. If `enabled` is `true`, `while_on_battery` is `true`, and the battery is discharging, block with `OnBattery`.
+3. If `enabled` is `true` and the active window class or process name matches `skip_break_windows` (case-insensitive), block with `SkipWindow`.
+4. If the active window class or process name matches `take_break_windows` (case-insensitive), return `Allow` even in fullscreen or gaming mode.
+5. If `enabled` is `true` and the active window is fullscreen, block with `Fullscreen`.
+6. If `while_gaming` is `true` and gaming detection matches (`is_gaming_context`), block with `Gaming`.
+7. If `enabled` is `true` and the operating system reports Do Not Disturb (`system_inhibited`), block with `SystemInhibited`.
+8. Otherwise, return `Allow`.
+
+Gaming detection (`is_gaming_context`) combines zero-permission operating system signals with foreground and background process checks while excluding game launchers and game editors:
+
+- On Windows, `SystemDndProvider` checks `SHQueryUserNotificationState` (`QUNS_RUNNING_D3D_FULL_SCREEN` sets `game_detected` and `is_fullscreen`, `QUNS_BUSY` sets `is_fullscreen`, `QUNS_PRESENTATION_MODE` sets `system_inhibited`), reads the foreground executable path with `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` and `QueryFullProcessImageNameW`, and scans visible windows with `EnumWindows` for background games.
+- On macOS, `SystemDndProvider` reads `NSWorkspace.sharedWorkspace.frontmostApplication` and `runningApplications` metadata (`localizedName`, `executableURL`, and `Info.plist` `LSApplicationCategoryType` for game categories) and checks `CGDisplayIsCaptured(CGMainDisplayID())` without Accessibility or Automation permissions. System Events AppleScript runs only when fullscreen DND (`do_not_disturb.enabled`) is enabled.
+- On Linux, `SystemDndProvider` checks Feral GameMode (`com.feralinteractive.GameMode.ClientCount > 0` over session D-Bus for both X11 and Wayland), reads `_NET_WM_PID` `/proc/<pid>/{exe,comm,environ}`, and scans user processes in `/proc` for Steam, Proton, Lutris, Heroic, or known game executables.
+- `sye-core` (`is_gaming_candidate`) matches common game library executable paths, game engine window classes (`steam_app_*`, `UnrealWindow`, `UnityWndClass`, `RiotWindowClass`, `Valve001`, `CryENGINE`, `gamescope`, `retroarch`, `lwjgl`), and known standalone game executable names.
 
 ### 7.3 `LimitConsecutiveSkipping`
 
@@ -180,7 +191,15 @@ The application stores configuration in `config.toml` with `schema_version = 1`.
 When `config.toml` is missing or invalid, `Config::load_or_default` returns `Config::default()` so the daemon still starts.
 `Config` stores `theme` (`system`, `light`, or `dark`) with default `system`.
 When `config.toml` omits `theme`, `Config` defaults `theme` to `system` without increasing `schema_version`.
+`Config` stores `language` (`system`, `en`, or `vi`, with `auto` accepted as an alias for `system`) with default `system`.
+When `config.toml` omits `language`, `Config` defaults `language` to `system` without increasing `schema_version`.
+When `language` is `system`, `sye-platform` detects the operating system locale (`AppleLanguages` on macOS, `GetUserPreferredUILanguages` and `GetUserDefaultLocaleName` on Windows, and `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, and `LANG` on Linux with gettext precedence, where a `C` or `POSIX` message locale ignores `LANGUAGE`) and falls back to `En` for unsupported locales.
+`sye-core` translates the 13 default short exercise names and 6 default long exercise names dynamically according to the active `Locale` while keeping custom or edited exercise names unchanged.
+CLI output remains in English to preserve script and E2E compatibility.
+The Settings window shows `ConfigError` messages in the active `Locale`.
 When `persist_state` is `true`, the daemon writes `SessionState` to `session.toml` using `BreakQueue::persisted_short_index()` and `BreakQueue::persisted_long_index()` so restarts resume at the staged break.
+`Config.autostart` defaults to `true`.
+On the first non-headless launch (when `config.toml` does not exist yet), the daemon registers the login item with `sync_system_autostart` and saves the initial `config.toml` so later launches keep respecting operating system startup changes.
 When `autostart` is `true`, `sye-platform` registers a per-user operating system login item:
 
 - On macOS `.app` bundles with the default configuration path, `sye-platform` registers `SMAppService.mainApp` (`ServiceManagement.framework`). In this mode, `sye-platform` also deletes any legacy `~/Library/LaunchAgents/io.github.safeyoureyes.SafeYourEyes.plist` file.
@@ -200,9 +219,13 @@ When the user changes `Launch at login (startup)`, the Settings window saves `co
 Each chime uses a smooth attack and exponential decay envelope to prevent clicks.
 Volume clamps to 0 through 100, and volume 0 produces a valid silent WAV buffer.
 `sye-platform` plays the buffer without blocking via `pw-play`, `paplay`, or `aplay` on Linux, `afplay` on macOS, and `PlaySoundW` on Windows.
-On macOS, `OsNotifier` shows a lazy non-activating `NSPanel` banner in the top-right corner of the active display, updates its countdown title in place each second without window animations, and destroys the panel on dismissal.
-On Linux, `OsNotifier` updates the active `notify-rust` notification in place each second and closes it on dismissal.
-On Windows, `OsNotifier` shows a lazy per-monitor-DPI-aware, topmost, non-activating Win32 popup banner in the bottom-right corner of the work area on the display under the cursor, follows the `AppsUseLightTheme` light or dark app mode, updates its countdown title in place each second, and destroys the window on dismissal.
+On macOS, `OsNotifier` shows a lazy non-activating Cozy `NSPanel` banner in the top-right corner of the active display (`16px` margin, `16px` continuous corner radius) with a 260ms Cozy ease-out fade-in (`cubic-bezier(0.22, 1, 0.36, 1)`) and destroys the panel on dismissal.
+On Windows, `OsNotifier` shows a lazy per-monitor-DPI-aware, topmost, non-activating Win32 popup banner in the bottom-right corner of the work area on the display under the cursor (`16px` margin, DWM rounded corners and `DWMWA_BORDER_COLOR` on Windows 11 with a 1px GDI Cozy border fallback on Windows 10) and destroys the window on dismissal.
+On macOS and Windows, the banner applies the complete Cozy Design System (`bg-surface`, `border-emphasized`, `text-primary`, `text-secondary`, 4px spacing grid, zero pure `#FFFFFF` or `#000000`), follows `Config.theme` (`System`, `Light`, or `Dark`), shows the break type and exercise name on the left, a Cozy countdown pill badge (`<N>s` under 1 minute, `M:SS` from 1 minute to under 100 minutes, `<N>m` at 100 minutes or more) on the right, and an inset 4px pill progress bar (`track` and `accent`) along the bottom.
+The progress bar animates continuously from the remaining ratio to `0%` over the remaining warning window (Core Animation `bounds.size.width` on macOS and a 60fps `WM_TIMER` with double-buffered GDI painting on Windows), and steps once per second when the operating system enables Reduce Motion.
+The countdown pill badge uses the Cozy yellow badge palette above 3 seconds and transitions to the Cozy accent palette (`ACCENT`, `FOCUS_RING`, and `ON_ACCENT`) at 3 seconds or less (`160ms` Cozy ease-out on macOS when Reduce Motion is off).
+The banner sets a spoken accessibility label without a static countdown number when it opens or changes title or exercise, avoiding repeated screen reader announcements every second.
+On Linux, `OsNotifier` updates the active `notify-rust` notification in place each second with a freedesktop `value` progress hint (0 to 100) and closes it on dismissal.
 On macOS, Linux, and Windows, when the user clicks or closes the pre-break notification, `OsNotifier` stops the countdown updates for the rest of that cycle.
 
 ### 9.2 Local IPC Protocol
@@ -255,9 +278,12 @@ Status banners and destructive buttons pair `warning-muted` / `error-muted` fill
 - `COZY_SPRING` (`stiffness: 420`, `damping: 32`, `mass: 0.9`) moves the sliding sidebar indicator and the centered switch knob (`3pt` symmetrical inset, `18pt` horizontal travel).
 - `COZY_EASE` (`cubic-bezier(0.22, 1, 0.36, 1)`) drives staggered list-item entrances on tab switch (`10px` rise, `260ms`, `28ms` step capped at row 12), overlay dialog scale-in (`0.98 -> 1.0`, `200ms`), and highlighter sweeps (`380ms`).
 - The Settings window skips staggered list-item entrances on initial window load and during in-place exercise edits.
-- Theme switching uses native `transition_colors` (`200ms`, `cubic-bezier(0.4, 0, 0.2, 1)`) on Cozy surfaces so appearance changes render without a blank-frame flash.
+- Cozy Circular Theme Reveal expands a circle from the theme toggle button to the farthest window corner (`480ms`, `cubic-bezier(0.4, 0, 0.2, 1)`) whenever the resolved Light or Dark appearance changes and `reduce_motion()` is `false`.
+- On macOS, the reveal pins a snapshot `CALayer` of the previous theme above the live view tree and animates an even-odd `CAShapeLayer` mask so the window switches with zero blank-frame flash.
+- On Linux and Windows, the reveal wraps the Settings content root in `nsh`'s `shader_transition()` WGSL shader (`THEME_REVEAL_WGSL`).
 - Toggling the theme writes `Config.theme` to `config.toml` immediately without saving unsaved form edits.
-- A theme-only configuration reload keeps the daemon's active break countdown unchanged.
+- Toggling the language writes `Config.language` to `config.toml` immediately and updates the Settings window, system tray, desktop notifications, and subsequent break overlays in place.
+- A theme-only or language-only configuration reload keeps the daemon's active break countdown unchanged.
 - Pressable pills scale to `0.97` on press.
 - All animations stop when the operating system enables Reduce Motion (`reduce_motion()`).
 - The break overlay opens a borderless `WindowFrameStyle::None` window at `WindowLevel::AboveDock` across `Workspaces::All`.
@@ -279,11 +305,12 @@ Status banners and destructive buttons pair `warning-muted` / `error-muted` fill
 - Switching Settings tabs resets the Form Card scroll offset to the top.
 - When `strict_break` is `true`, the `Policies` screen sets `limit_consecutive_skips.enabled` to `false` and disables `Limit consecutive skips` and `Max consecutive skips`.
 - When `strict_break` is `true`, the `Skip Limit` KPI card shows `Strict`.
-- The fixed page header shows the active screen title (`Timing`, `Policies`, `Exercises`, or `About & Support`) with the animated highlighter bar on the left, the top-right Cozy theme toggle pill (`Theme: System`, `Theme: Light`, `Theme: Dark` with vector SVG icon) on the right, and four Pastel KPI summary cards below.
+- The fixed page header shows the active screen title (`Timing`, `Policies`, `Exercises`, or `About & Support`) with the animated highlighter bar on the left, a live daemon countdown badge, a Cozy language toggle pill (`Auto`/`Tự động`, `EN`, `VI` with globe SVG icon), and the Cozy theme toggle pill (`Theme: System`, `Theme: Light`, `Theme: Dark` with vector SVG icon) on the right, and four Pastel KPI summary cards below.
+- The live daemon countdown badge uses Cozy v0.2.0 category badge tokens (`green`, `yellow`, `orange`, `blue`, and `gray`), pairs each scheduler state with a vector SVG icon, separates the status label from the bold tabular-numeral `MM:SS` countdown chip, and exposes `AccessibilityRole::Timer` with a spoken label in whole minutes ("less than a minute" under 1 minute, "Break starting soon" during the pre-break warning), so the label changes at most once per minute.
 - The unified rounded Form Card contains the scrollable form and the clipped sticky toolbar with automatic save status and a `Reset to defaults` button.
 - Every valid change in the Settings window saves `config.toml` immediately. Invalid input shows a validation banner and keeps the last valid `config.toml` on disk. While the Settings window is open, the daemon checks the `config.toml` modification time every second and applies a changed configuration.
 - The `Reset to defaults` button is disabled while the configuration matches `Config::reset_to_default()` and activates with the accent style when any setting differs from default. Pressing `Reset to defaults` restores defaults and saves immediately.
-- The Floating Sage Sidebar shows the installed version (`v<version>`) at the bottom. When a newer stable release is available, it shows a clickable pill badge (`↑ v<latest>`) next to the version. Clicking the badge opens `About & Support`.
+- The Floating Sage Sidebar shows the installed version (`v<version>`) at the bottom. When a newer stable release is available, the sidebar shows a clickable pill badge with a download icon and `v<latest>`. Clicking the badge opens `About & Support` and starts the platform update action (self-update on writable Linux and Windows installations, or opening the download page on macOS and read-only installations).
 - The About & Support tab shows the **Updates** section above the **Buy Me a Coffee** link and QR code for `https://buymeacoffee.com/bbeeezzzzz`. The **Updates** section provides the `Check for updates automatically` switch (`Config.check_for_updates`), `Check for Updates`, and either `Update & Restart` or a link to `https://tunglt1810.github.io/safe-your-eyes/`.
 - Headless UI tests validate both screens in CI using `nsh_testing::Headless`.
 
@@ -291,9 +318,10 @@ Status banners and destructive buttons pair `warning-muted` / `error-muted` fill
 
 1. When `Config.check_for_updates` is `true` and `--headless` is not set, the daemon checks for a newer stable GitHub Release on a background thread. The first check runs 15 seconds after startup if the cached check is due, and subsequent checks run every 12 hours. The daemon saves the result in `update.toml` next to `session.toml`.
 2. Update checks query the GitHub Releases API and fall back to the `releases/latest` redirect URL if the API fails. Draft releases and pre-release tags that contain `-` are ignored.
-3. When a newer stable release exists, `TrayHandle` inserts an `Update available (v<latest>)` item into the tray menu. The item stays disabled while the menu is locked or while an update runs.
+3. When a newer stable release exists, `TrayHandle` inserts an `Update available (v<latest>)` item into the tray menu. The daemon polls `update.toml` every 500ms so a manual check in the Settings window updates the tray menu while the Settings window stays open. The item stays disabled while the menu is locked or while an update runs.
 4. On Windows and Linux with a writable executable directory, triggering an update downloads the platform binary and `SHA256SUMS.txt` and verifies the SHA-256 checksum. After verification, the app replaces the executable atomically and restarts the daemon after it releases the IPC socket. On Windows, the app keeps the previous executable as a `.old` backup. The new daemon starts before the previous process stops, so the new daemon cannot delete the backup at that start. The app deletes the backup at the subsequent start.
 5. On macOS, on read-only installations, or after a self-update error, the app opens the public GitHub Pages download URL (`https://tunglt1810.github.io/safe-your-eyes/`). When Homebrew Cask is detected on macOS, the app also shows the `brew upgrade --cask safe-your-eyes` command.
+6. Building with the `msstore` Cargo feature (`--features msstore`) disables all in-app update behavior for Microsoft Store MSIX packages: the daemon does not run background update checks or binary replacement, `TrayHandle` omits the update menu item, the sidebar omits the update badge, and the `About & Support` tab shows `"Updates are managed by Microsoft Store."` with the installed version while keeping the `Support Safe Your Eyes` section.
 
 ## 11. CLI Contract (`safe-your-eyes`)
 
@@ -307,9 +335,9 @@ Global options:
 
 Modes and control flags:
 
-- No control flag: Start the single-instance daemon. When the user omits `--headless` and `--background` and macOS did not launch the process as a Login Item (`keyAELaunchedAsLogInItem`), the daemon opens the Settings window after startup and keeps the system tray active. When the Settings window closes after saving changes, the daemon reloads `config.toml` immediately. When the Settings window that opened at startup closes before `Scheduler` leaves its first `Waiting` (a `Resting` from `SmartPause` does not count), the daemon starts that countdown again from its full interval. If a daemon already listens on `--socket`, the CLI sends `IpcCommand::OpenSettings` (unless `--headless` or `--background` is present), prints `Safe Your Eyes is already running` to stdout, and exits with code 0.
+- No control flag: Start the single-instance daemon. When the user omits `--headless` and `--background` and macOS did not launch the process as a Login Item (`keyAELaunchedAsLogInItem`), the daemon opens the Settings window after startup and keeps the system tray active. The daemon reloads `config.toml` when the Settings window saves changes or closes. While the Settings window is closed, the daemon checks `config.toml` every second and applies outside edits. During `PreBreak` or `Break`, the daemon applies outside edits after the break ends. The daemon ignores an invalid `config.toml` and prints one warning to stderr for each change of the file. If a daemon already listens on `--socket` with a different version (or omits `daemon_version`) and is not in `PreBreak` or `Break`, a non-headless launch stops the older daemon cleanly and takes over the socket. A Settings subprocess started by an older daemon triggers this handoff automatically. Otherwise, the CLI sends `IpcCommand::OpenSettings` (unless `--headless` or `--background` is present), prints `Safe Your Eyes is already running` to stdout, and exits with code 0.
 - `--status`: Print human-readable daemon status to stdout and exit with code 0. If no daemon is running, print `Safe Your Eyes is not running` to stderr and exit with code 1.
-- `--status --json`: Print JSON with `state`, `enabled`, `next_break_type`, `next_break_name`, `seconds_until_next_break`, and `consecutive_skips`.
+- `--status --json`: Print JSON with `state`, `enabled`, `next_break_type`, `next_break_name`, `seconds_until_next_break`, `consecutive_skips`, and optional `daemon_version`.
 - `-e`, `--enable`: Resume the running daemon.
 - `-d`, `--disable [MINUTES]`: Pause the running daemon for `MINUTES`, or until restart if omitted or `0`.
 - `-t`, `--take-break`: Start the next scheduled break immediately.
@@ -342,7 +370,7 @@ This section lists the operating system and framework limits that the code works
 11. `UNUserNotificationCenter` shows a new animated banner for each countdown update, and temporary banners hide after about 5 seconds. `OsNotifier` uses its own `NSPanel` banner instead.
 12. A panel that is released inside its own `mouseDown:` handler frees the object that runs the handler. The banner hides first and releases the panel later. The banner accepts the first mouse click, so one click dismisses it while another app is active.
 13. `NSApplication::activate()` has no effect after the tray menu closes. The Settings window requests `Activation::Take` at first display and again after AppKit ends menu tracking.
-14. The Settings window passes the saved theme to `Root`, not to `AppOptions`. This keeps the real system color scheme available for the System theme.
+14. The Settings window passes the saved theme to `Root` and `AppOptions` to avoid a first-frame flash, and resets the `NSApplication` and `NSWindow` appearance to `None` when switching back to `System` so the window follows the operating system color scheme.
 15. A native titled window without `NSToolbar` has a 16pt corner radius. The Cozy radius scale and the 8pt outer Settings padding use this value.
 16. `launchd` can stop the process when `launchctl` removes a running job. `sye-platform` deletes the legacy plist before it runs `launchctl`.
 17. A LaunchAgent plist without `AssociatedBundleIdentifiers` shows no app icon in System Settings. The fallback plist sets this key to the bundle identifier.
@@ -356,10 +384,10 @@ This section lists the operating system and framework limits that the code works
 2. nsh ends the process inside `run_app`, so `run_overlay_with_hook` does not return. The overlay writes its outcome from the outcome hook.
 3. Explorer moves the taskbar below a window only when the window is full screen, is in the foreground, and has a taskbar button. The overlay window has a taskbar button, and the overlay marks its visible windows full screen with `ITaskbarList2::MarkFullscreenWindow`.
 4. Named pipes return `ErrorKind::Unsupported` for stream timeouts. The IPC code ignores this error.
-5. `GetSysColor` does not follow the app dark mode. In dark mode, the banner uses the Windows 11 flyout colors.
+5. `GetSysColor` does not follow app dark mode and uses pure `#FFFFFF`/`#000000`. The Windows banner paints the Cozy Design System palette directly and follows `Config.theme` (reading `AppsUseLightTheme` when `Config.theme` is `System`).
 6. The banner uses per-thread DPI awareness for its Win32 calls. The tray icon keeps the process DPI awareness.
 7. `sye-cli/build.rs` embeds the app icon with resource ID 1 (`winresource::set_icon`). The banner loads the icon with this ID.
-8. Windows 10 does not support rounded window corners from DWM. The banner keeps square corners there.
+8. Windows 10 does not support rounded window corners from DWM. The banner keeps square corners there and draws a 1px Cozy `border-emphasized` GDI frame instead of `DWMWA_BORDER_COLOR`.
 9. Native caption buttons occupy the top-right corner on Windows and Linux. The Settings window keeps clear space at the top for window drag.
 10. Windows blocks `SetForegroundWindow` when the daemon does not hold the foreground lock, and UIPI blocks `AttachThreadInput` against elevated windows. `PlatformEventLoop::activate_child` restores a minimized child window, attaches thread input when `SetForegroundWindow` fails, and toggles `HWND_TOPMOST` briefly if focus still fails.
 11. `Path::canonicalize` returns a `\\?\` verbatim prefix on Windows. `sye-platform` strips that prefix before it writes the Windows startup command.
@@ -371,6 +399,7 @@ This section lists the operating system and framework limits that the code works
 2. The GNOME Mutter `IdleMonitor` returns idle time in milliseconds as `u64`. The Freedesktop `ScreenSaver` fallback returns idle time in milliseconds as `u32`.
 3. The notification server can give a new id to a notification that replaces an expired one. `OsNotifier` stores the id that the server returns.
 4. `handle_action` blocks until the server reports `ActionInvoked` or `NotificationClosed`. `OsNotifier` calls it on a separate thread.
+5. After an atomic binary replacement on Linux, `std::env::current_exe` returns `<path> (deleted)`. The daemon strips that suffix before it starts the replacement binary.
 
 ### 12.4 Native Shell (`nsh`)
 
@@ -379,3 +408,5 @@ This section lists the operating system and framework limits that the code works
 3. The engine starts the clock of an animation at its first frame. Frames before the window is shown and sized are lost. The overlay starts its animations after its window is shown.
 4. A width change does not animate per frame. The progress bar scales its fill from the center with one `ScaleX` animation for the whole break.
 5. `set_interval` skips late runs. The overlay calculates the countdown from the clock, not from the number of ticks.
+6. In `nsh` 0.7 window model v2, the app root is a hidden host and `main_window().focus()` does nothing. Both Settings and the primary break overlay open an explicit `desktop::window()` with `QuitMode::LastWindowClosed`. On Linux and Windows, Settings uses `shader_transition()` instead of `screen_transition()` because `screen_transition()` binds to the hidden host root.
+7. In `nsh-core` 0.7.1, `retag()` drops `node.shader` when a component returns a shader as its root element. Settings nests `shader_transition()` under a `view()` so `create()` allocates its shader state.

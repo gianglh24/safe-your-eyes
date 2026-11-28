@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 description = "Cross-platform OS adapters for tray, idle, DND, notifications, audio, IPC, and autostart"
 
+[features]
+msstore = []
+
 [dependencies]
 directories = "6"
 interprocess = { version = "2.4", default-features = false }
@@ -30,6 +33,7 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",
     "libc",
+    "NSAccessibility",
     "NSAppearance",
     "NSApplication",
     "NSButton",
@@ -54,6 +58,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSView",
     "NSVisualEffectView",
     "NSWindow",
+    "NSWorkspace",
     "objc2-core-foundation",
     "objc2-quartz-core",
 ] }
@@ -63,6 +68,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSAppleEventDescriptor",
     "NSAppleEventManager",
     "NSArray",
+    "NSBundle",
     "NSData",
     "NSDate",
     "NSEnumerator",
@@ -75,18 +81,46 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSRunLoop",
     "NSString",
     "NSTimer",
+    "NSURL",
+    "NSUserDefaults",
+    "NSValue",
+] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CFCGTypes",
+    "CFString",
+] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = [
+    "CGAffineTransform",
+    "CGBitmapContext",
+    "CGColorSpace",
+    "CGContext",
+    "CGDirectDisplay",
+    "CGImage",
+    "CGPath",
+    "libc",
+    "objc2",
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "std",
+    "CAAnimation",
     "CALayer",
+    "CAMediaTiming",
+    "CAMediaTimingFunction",
+    "CAShapeLayer",
+    "CATransaction",
+    "block2",
     "objc2-core-foundation",
+    "objc2-core-graphics",
 ] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
+    "Win32_Storage_Packaging_Appx",
     "Win32_System_Console",
     "Win32_System_LibraryLoader",
     "Win32_System_Power",
@@ -98,6 +132,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows = { version = "0.62", features = [
+    "ApplicationModel",
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_UI_Shell",

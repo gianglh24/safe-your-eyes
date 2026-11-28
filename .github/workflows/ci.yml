@@ -7,6 +7,7 @@ on:
     paths: &code
       - "crates/**"
       - "assets/**"
+      - "packaging/**"
       - "e2e/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -29,13 +30,13 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Install Linux GTK 4 dependencies
+      - name: Install Linux GTK 4 and Xvfb dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libgtk-4-dev pkg-config
+          sudo apt-get install -y -qq libgtk-4-dev pkg-config xvfb x11-utils x11-xserver-utils xdotool
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -49,19 +50,34 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo clippy -p sye-cli -p sye-platform -p sye-ui --all-targets --features msstore -- -D warnings
 
       - name: Run unit and headless UI tests
-        run: cargo test --workspace --no-fail-fast
+        run: |
+          cargo test --workspace --no-fail-fast
+          cargo test -p sye-cli -p sye-platform -p sye-ui --features msstore --no-fail-fast
 
       - name: Run opaque-box E2E suite (Linux)
         if: runner.os == 'Linux'
         run: |
           cargo build --bin safe-your-eyes
           python3 e2e/run_e2e.py --bin target/debug/safe-your-eyes --tier all
+          xvfb-run -a -s "-screen 0 1920x1080x24" python3 e2e/gui_smoke.py --bin target/debug/safe-your-eyes
 
       - name: Build release binary
         run: cargo build --release --bin safe-your-eyes
+
+      - name: Run real-OS GUI window smoke E2E (macOS / Windows)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python e2e/gui_smoke.py --bin target/release/safe-your-eyes.exe
+          else
+            python3 e2e/gui_smoke.py --bin target/release/safe-your-eyes
+          fi
 
       - name: Calculate release SHA-256 and scan with VirusTotal
         shell: bash
@@ -94,3 +110,21 @@ jobs:
           else
             echo "- **VirusTotal Upload**: Skipped (\`VT_API_KEY\` repository secret not configured)" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Build Microsoft Store release binary (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --release --bin safe-your-eyes --features msstore
+
+      - name: Verify MSIX packaging (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          & packaging/msix/package-msix.ps1 `
+            -Version $version `
+            -PackageName "SafeYourEyes.CIVerify" `
+            -Publisher "CN=CI-Verify" `
+            -PublisherDisplayName "Safe Your Eyes CI" `
+            -X64Exe "target/release/safe-your-eyes.exe" `
+            -OutputDir "dist-msix-ci" `
+            -SkipBundle

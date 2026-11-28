@@ -84,6 +84,7 @@ pub struct DoNotDisturbConfig {
     pub skip_break_windows: Vec<String>,
     pub take_break_windows: Vec<String>,
     pub while_on_battery: bool,
+    pub while_gaming: bool,
 }
 
 impl Default for DoNotDisturbConfig {
@@ -93,7 +94,15 @@ impl Default for DoNotDisturbConfig {
             skip_break_windows: Vec::new(),
             take_break_windows: Vec::new(),
             while_on_battery: false,
+            while_gaming: true,
         }
+    }
+}
+
+impl DoNotDisturbConfig {
+    #[must_use]
+    pub const fn needs_query(&self) -> bool {
+        self.enabled || self.while_gaming
     }
 }
 
@@ -145,6 +154,7 @@ pub enum ThemeMode {
 pub struct Config {
     pub schema_version: u32,
     pub theme: ThemeMode,
+    pub language: crate::i18n::LanguageMode,
     pub short_break_interval_secs: u64,
     pub short_break_duration_secs: u64,
     pub long_break_interval_secs: u64,
@@ -172,6 +182,7 @@ impl Default for Config {
         Self {
             schema_version: CONFIG_SCHEMA_VERSION,
             theme: ThemeMode::default(),
+            language: crate::i18n::LanguageMode::default(),
             short_break_interval_secs: 900,
             short_break_duration_secs: 15,
             long_break_interval_secs: 4500,
@@ -184,7 +195,7 @@ impl Default for Config {
             shortcut_disable_secs: 2,
             fade_in_ms: 1500,
             persist_state: false,
-            autostart: false,
+            autostart: true,
             check_for_updates: true,
             smart_pause: SmartPauseConfig::default(),
             do_not_disturb: DoNotDisturbConfig::default(),
@@ -359,24 +370,9 @@ impl Config {
     pub fn save_to_path(&self, path: &Path) -> Result<(), ConfigError> {
         self.validate()?;
         let encoded = self.to_toml_string()?;
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent).map_err(|err| ConfigError::Io {
-                message: err.to_string(),
-            })?;
-        }
-        fs::write(path, encoded).map_err(|err| ConfigError::Io {
+        crate::write_string_atomic(path, &encoded).map_err(|err| ConfigError::Io {
             message: err.to_string(),
         })
-    }
-}
-
-impl std::str::FromStr for Config {
-    type Err = ConfigError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_toml_str(s)
     }
 }
 
@@ -426,7 +422,8 @@ mod tests {
         assert_eq!(cfg.shortcut_disable_secs, 2);
         assert_eq!(cfg.fade_in_ms, 1500);
         assert!(!cfg.persist_state);
-        assert!(!cfg.autostart);
+        assert!(cfg.autostart);
+        assert!(cfg.do_not_disturb.while_gaming);
         assert_eq!(cfg.short_breaks.len(), 13);
         assert_eq!(cfg.long_breaks.len(), 6);
         assert_eq!(cfg.validate(), Ok(()));
@@ -467,9 +464,40 @@ mod tests {
     }
 
     #[test]
+    fn language_mode_round_trip_and_missing_field_defaults_to_system()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::i18n::LanguageMode;
+
+        for (mode, expected_toml) in [
+            (LanguageMode::System, "language = \"system\""),
+            (LanguageMode::En, "language = \"en\""),
+            (LanguageMode::Vi, "language = \"vi\""),
+        ] {
+            let cfg = Config {
+                language: mode,
+                ..Config::default()
+            };
+            let toml_text = cfg.to_toml_string()?;
+            assert!(toml_text.contains(expected_toml));
+            let parsed = Config::from_toml_str(&toml_text)?;
+            assert_eq!(parsed.language, mode);
+        }
+
+        let alias = Config::from_toml_str("language = \"auto\"\n")?;
+        assert_eq!(alias.language, LanguageMode::System);
+
+        let legacy =
+            Config::from_toml_str("schema_version = 1\nshort_break_interval_secs = 600\n")?;
+        assert_eq!(legacy.language, LanguageMode::System);
+        Ok(())
+    }
+
+    #[test]
     fn partial_toml_uses_defaults() -> Result<(), Box<dyn std::error::Error>> {
         let parsed = Config::from_toml_str("short_break_interval_secs = 600\n")?;
         assert_eq!(parsed.theme, ThemeMode::System);
+        assert!(parsed.autostart);
+        assert!(parsed.do_not_disturb.while_gaming);
         assert_eq!(parsed.short_break_interval_secs, 600);
         assert_eq!(parsed.long_break_interval_secs, 4500);
         assert_eq!(parsed.short_breaks.len(), 13);
